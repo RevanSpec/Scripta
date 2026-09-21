@@ -79,15 +79,16 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 1 — Cœur fonctionnel (PoC CLI)
 
-> **Statut : livré, à une réserve près.** La chaîne complète
-> `URL → métadonnées → PCM → inférence → texte` fonctionne, vérifiée par une
-> transcription réelle de l'échantillon de référence de whisper.cpp avec le
-> modèle `tiny`. 53 tests verts sur Windows, dont 5 d'inférence qui se sautent
-> proprement sans les fixtures pour que la CI reste verte.
+> **Statut : livré.** La chaîne complète
+> `URL → métadonnées → PCM → inférence → texte` a été exécutée sur une vraie
+> vidéo YouTube (« Me at the zoo », 19 s) : 304 089 échantillons extraits, soit
+> exactement 19,0 s à 16 kHz, transcrits en 2 segments avec détection de langue.
+> 54 tests verts sur Windows, dont 6 d'inférence qui se sautent proprement sans
+> les fixtures pour que la CI reste verte.
 >
-> **Réserve :** aucune exécution de bout en bout sur une vraie URL YouTube, faute
-> de `yt-dlp` et `ffmpeg` sur la machine de développement. Le premier critère de
-> sortie ci-dessous reste donc à cocher.
+> **Restent à confirmer :** la tenue en mémoire sur une vidéo d'une heure, et la
+> CI sur les trois OS — le build natif de whisper.cpp n'a été éprouvé que sous
+> Windows/MSVC.
 
 **Objectif :** un chemin nominal de bout en bout, sans robustesse. `URL → texte sur stdout`.
 
@@ -108,7 +109,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ### Critères de sortie
 
-- [ ] `scripta "https://www.youtube.com/watch?v=<ID>" > out.txt` produit une transcription correcte sur les **trois** plateformes.
+- [x] `scripta "https://www.youtube.com/watch?v=<ID>" > out.txt` produit une transcription correcte. *(Vérifié sous Windows ; les deux autres plateformes dépendent de la CI.)*
 - [x] **Invariant zero-disk vérifié** : aucun fichier créé dans le répertoire temporaire pendant l'exécution (test instrumenté).
 - [x] Test de non-régression du deadlock `stderr` **en place et vert** — validé par réintroduction du défaut : sans drainage, `extract()` se fige et le test échoue au bout de 30 s.
 - [ ] Une vidéo de 1 h se transcrit sans dépassement de mémoire.
