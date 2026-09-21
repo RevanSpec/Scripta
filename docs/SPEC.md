@@ -1,0 +1,671 @@
+# Scripta — Cahier des charges technique et fonctionnel
+
+**Version :** 2.0
+**Statut :** Validé pour implémentation
+**Révision précédente :** 1.0 (voir [Annexe C — Journal des corrections](#annexe-c--journal-des-corrections))
+
+---
+
+## 1. Présentation générale
+
+### 1.1 Vision
+
+Scripta est un outil de transcription audio autonome, performant et respectueux de la vie privée. À partir d'une URL YouTube, il extrait le flux audio sans télécharger le flux vidéo, réalise l'inférence **localement** via Whisper, puis exporte le texte sous différents formats (brut, sous-titres, structuré).
+
+L'outil se décline sous deux formes bâties sur le même moteur :
+
+- **`scripta`** — un binaire CLI scriptable, intégrable dans des pipelines d'automatisation.
+- **Scripta Desktop** — une application de bureau (GUI) réactive et multiplateforme.
+
+### 1.2 Périmètre et non-objectifs
+
+**Dans le périmètre :**
+
+- Vidéos YouTube publiques et non-listées (VOD uniquement).
+- Transcription locale, sans aucun envoi de contenu à un service tiers.
+- Traduction vers l'anglais (fonction native de Whisper).
+- Export `txt`, `srt`, `vtt`, `json`.
+
+**Hors périmètre (v1) — décisions explicites, pas des oublis :**
+
+| Non-objectif | Justification |
+|---|---|
+| Diarisation (identification des locuteurs) | Nécessite un second modèle (pyannote/sherpa) et une logique d'alignement. Candidat v2. |
+| Transcription de lives en direct | Flux de durée non bornée, incompatible avec le modèle d'inférence retenu ([ADR-003](#adr-003--inférence-non-streamée)). Détecté et refusé proprement ([SF-07](#sf-07--taxonomie-derreurs-et-codes-de-sortie)). |
+| Plateformes autres que YouTube | `yt-dlp` en supporte des milliers, mais la validation d'URL ([SF-01](#sf-01--validation-durl-et-sonde-de-métadonnées)) est volontairement restrictive. Élargissement trivial mais non testé en v1. |
+| Édition du texte transcrit dans la GUI | La GUI affiche et exporte ; l'édition relève d'un éditeur de sous-titres. |
+| Traduction vers une langue autre que l'anglais | Limite intrinsèque de Whisper. |
+
+### 1.3 Licence et conformité
+
+- **Licence du projet : GPLv3** — déjà actée (`LICENSE` à la racine du dépôt).
+- **Compatibilité amont :** `yt-dlp` (The Unlicense) et `whisper.cpp` / `whisper-rs` (MIT) sont compatibles sans réserve.
+- **FFmpeg :** distribué comme binaire séparé invoqué par sous-processus. Les builds GPL de FFmpeg sont « GPLv2 ou ultérieure », donc compatibles GPLv3. **Obligation :** embarquer les textes de licence de FFmpeg et de yt-dlp dans le bundle (`THIRD_PARTY_LICENSES.md`) et publier une offre de code source conforme.
+- **⚠️ Incompatibilité connue :** la GPLv3 est incompatible avec les conditions de l'App Store d'Apple. La distribution macOS se fera exclusivement par `.dmg` signé et notarisé hors App Store.
+- **Conditions d'utilisation YouTube :** le téléchargement de contenu contrevient aux CGU de YouTube. Le `README.md` doit porter un avertissement explicite indiquant que l'outil est fourni à des fins d'usage personnel et licite, et que la responsabilité de l'usage incombe à l'utilisateur.
+
+### 1.4 Nommage et conventions
+
+| Élément | Valeur |
+|---|---|
+| Nom du projet / dépôt | **Scripta** |
+| Binaire CLI | **`scripta`** |
+| Application de bureau | **Scripta Desktop** |
+| Identifiant bundle | `com.scripta.desktop` (à ajuster selon le domaine retenu) |
+| Répertoire de cache | `scripta/` (voir [SF-03](#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper)) |
+
+> **Décision :** le nom `yt-transcribe` de la v1 du cahier des charges est abandonné au profit de `scripta`, par cohérence avec le dépôt. Un renommage ultérieur se paierait en dette documentaire pendant des mois.
+
+---
+
+## 2. Architecture technique
+
+### 2.1 Vue d'ensemble
+
+Le cœur applicatif et les interfaces sont développés en Rust. L'extraction réseau et le décodage du flux YouTube sont délégués à deux binaires sidecars autonomes (`yt-dlp`, `ffmpeg`).
+
+```
+ ┌─────────────────────────────────────────────────────────────┐
+ │                    Couche Présentation                      │
+ │   CLI (Rust / clap)      │     GUI (Tauri v2 + Svelte)      │
+ └──────────────────────────┬──────────────────────────────────┘
+                            │
+                            ▼
+ ┌─────────────────────────────────────────────────────────────┐
+ │                     crates/core (Rust)                      │
+ │  Orchestration · sonde métadonnées · cache modèles ·        │
+ │  cache transcriptions · formateurs · taxonomie d'erreurs    │
+ └───────────┬─────────────────────────────────┬───────────────┘
+             │ Pipes anonymes (stdout)         │ Mémoire (Vec<f32>)
+             ▼                                 ▼
+ ┌───────────────────────────────┐  ┌──────────────────────────┐
+ │        Sidecars externes      │  │  whisper-rs (ggml/C++)   │
+ │  yt-dlp  ──►  ffmpeg          │  │  Inférence IA locale     │
+ │  (WebM/Opus)  (PCM s16le      │  │  Vulkan / Metal / CPU    │
+ │               16 kHz mono)    │  │  Backends chargés à      │
+ │                               │  │  l'exécution (ADR-001)   │
+ └───────────────────────────────┘  └──────────────────────────┘
+```
+
+**Flux nominal :**
+
+1. Validation de l'URL (`core::url`).
+2. Sonde métadonnées unique `yt-dlp -J` → titre, chaîne, ID, durée, `is_live`, sous-titres disponibles.
+3. Contrôle de recevabilité (live ? durée excessive ? cache présent ?).
+4. Résolution du modèle (cache local ou téléchargement vérifié).
+5. Extraction audio streamée `yt-dlp | ffmpeg` → `Vec<f32>` en RAM.
+6. Inférence `whisper_full` avec callbacks de progression et de segments.
+7. Formatage et écriture.
+
+### 2.2 Découpage des crates
+
+```
+Scripta/
+├── Cargo.toml                  # workspace
+├── LICENSE                     # GPLv3
+├── THIRD_PARTY_LICENSES.md
+├── docs/
+│   ├── SPEC.md
+│   └── ROADMAP.md
+├── crates/
+│   ├── core/                   # bibliothèque — aucune dépendance UI
+│   │   ├── src/
+│   │   │   ├── url.rs          # validation stricte
+│   │   │   ├── probe.rs        # yt-dlp -J → Metadata
+│   │   │   ├── audio.rs        # pipeline yt-dlp|ffmpeg → Vec<f32>
+│   │   │   ├── models.rs       # cache, téléchargement, SHA-256
+│   │   │   ├── transcribe.rs   # wrapper whisper-rs
+│   │   │   ├── format/         # txt, srt, vtt, json
+│   │   │   ├── sidecar.rs      # résolution de chemin, mise à jour
+│   │   │   ├── cache.rs        # cache de transcriptions
+│   │   │   └── error.rs        # ScriptaError (taxonomie SF-07)
+│   │   └── tests/
+│   │       └── fixtures/       # WAV courts, faux sidecars, golden files
+│   ├── cli/                    # binaire `scripta`
+│   └── desktop/                # wrapper Tauri v2
+│       ├── tauri.conf.json
+│       ├── src/                # backend Rust (commandes IPC)
+│       ├── ui/                 # frontend TypeScript + Svelte
+│       └── binaries/           # sidecars par triplet cible
+```
+
+> **Correction v1 :** `src-tauri/` était placé à la racine, à côté de `crates/`. Il devient `crates/desktop/` pour homogénéiser le workspace.
+
+### 2.3 Décisions d'architecture (ADR)
+
+Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte cher.
+
+#### ADR-001 — Stratégie d'accélération matérielle
+
+**Contexte.** La v1 du cahier des charges contenait une contradiction : le §5.2 décrivait une *compilation conditionnelle* des backends (`cuda`, `metal`, AVX2), tandis que la maquette GUI affichait « CUDA (NVIDIA RTX 4070) détectée », ce qui suppose une *détection à l'exécution*. Les deux sont incompatibles : un binaire lié statiquement à CUDA **ne démarre pas** sur une machine dépourvue de driver NVIDIA — l'éditeur de liens dynamique échoue avant `main()`.
+
+**Décision.**
+
+| Plateforme | Backend principal | Repli |
+|---|---|---|
+| macOS (Apple Silicon) | **Metal** (compilé en dur, toujours présent) | CPU |
+| macOS (Intel) | CPU (AVX2) | — |
+| Windows x86_64 | **Vulkan**, chargé dynamiquement | CPU (AVX2) |
+| Linux x86_64 | **Vulkan**, chargé dynamiquement | CPU (AVX2) |
+
+- **Vulkan plutôt que CUDA** : un seul backend couvre NVIDIA, AMD et Intel. CUDA n'apporte un gain significatif que sur les gros modèles et impose une matrice de build (toolkit CUDA + MSVC sur Windows) notoirement fragile, pour ne couvrir qu'un seul fabricant.
+- **Chargement dynamique des backends ggml** (`GGML_BACKEND_DL`) : le binaire démarre toujours, énumère les backends disponibles à l'exécution et sélectionne le meilleur. C'est ce qui rend la détection annoncée par la GUI réellement possible avec un seul artefact de distribution.
+- Une build CUDA optionnelle (`--features cuda`) reste possible pour les utilisateurs compilant depuis les sources ; **elle n'est pas distribuée**.
+
+**Conséquence.** Un seul artefact par plateforme. La commande `scripta doctor` expose les backends détectés.
+
+**Risque.** Le chargement dynamique de backends ggml doit être validé dès le [Jalon 0](ROADMAP.md#jalon-0--dérisquage) avec la version de `whisper-rs` retenue. Si le support s'avère insuffisant, le repli est de distribuer deux artefacts par plateforme (`scripta` / `scripta-gpu`), au prix d'une CI plus lourde.
+
+#### ADR-002 — Pipeline audio sans shell
+
+**Contexte.** La v1 documentait le pipeline sous forme de commande shell (`yt-dlp … | ffmpeg …`) tout en interdisant le shell au §5.1 — contradiction directe.
+
+**Décision.** Les deux processus sont câblés manuellement en Rust, sans interpréteur de commandes. Le `stdout` de `yt-dlp` est branché sur le `stdin` de `ffmpeg` via `Stdio::from()`. Voir [SF-02](#sf-02--pipeline-dextraction-audio--zero-disk-) pour l'implémentation de référence.
+
+#### ADR-003 — Inférence non streamée
+
+**Contexte.** La v1 laissait entendre que l'inférence consommait l'audio en flux. C'est faux : `whisper_full()` prend le buffer PCM **entier** en argument.
+
+**Décision.** Le téléchargement est streamé (aucun fichier temporaire), l'inférence ne l'est pas. L'audio est accumulé intégralement en RAM, puis soumis en un appel.
+
+**Justification.** Le téléchargement d'une heure d'audio Opus prend quelques dizaines de secondes, l'inférence plusieurs minutes : le recouvrement des deux n'apporterait qu'un gain marginal. À l'inverse, un découpage manuel en tranches dégrade la qualité aux jointures (perte de contexte, mots coupés, répétitions) et casse la cohérence des horodatages.
+
+**Conséquences.**
+
+- Empreinte mémoire audio : **≈ 230 Mo par heure** (16 000 échantillons/s × 4 octets). Une garde `--max-duration` (défaut 240 min) protège contre les vidéos pathologiques.
+- L'affichage progressif de la GUI est alimenté par le **callback de nouveaux segments** de whisper.cpp, pas par un découpage. whisper.cpp traite l'audio séquentiellement par fenêtres de 30 s et émet ses segments au fil de l'eau : le rendu est donc bien progressif, simplement il démarre une fois le téléchargement achevé.
+
+#### ADR-004 — Emplacement des sidecars mis à jour
+
+**Contexte.** La v1 prévoyait une mise à jour in-place du binaire `yt-dlp` via `yt-dlp -U`. **Sur macOS, remplacer un fichier à l'intérieur d'un `.app` signé invalide la signature de code ; sur Apple Silicon, l'application refuse alors de se lancer.** Le même mécanisme échoue sous Windows lorsque l'application est installée dans `Program Files` (écriture refusée sans élévation).
+
+**Décision.** Deux emplacements, avec priorité à la copie utilisateur :
+
+| | Chemin |
+|---|---|
+| Sidecar embarqué (lecture seule, signé) | à l'intérieur du bundle applicatif |
+| Sidecar mis à jour (inscriptible) | `<data_dir>/scripta/bin/` |
+
+`core::sidecar::resolve()` retourne la copie utilisateur si elle existe **et** que sa version est supérieure, sinon la copie embarquée. La mise à jour ([SF-06](#sf-06--maintenance-du-sidecar-yt-dlp)) télécharge toujours vers l'emplacement inscriptible ; le bundle signé n'est jamais modifié.
+
+---
+
+## 3. Spécifications fonctionnelles
+
+### SF-01 — Validation d'URL et sonde de métadonnées
+
+**Validation stricte.** Avant tout appel réseau, l'URL est analysée par `url::Url` (jamais par expression régulière) :
+
+- Schéma : `https` exclusivement.
+- Hôte, en liste blanche exacte : `youtube.com`, `www.youtube.com`, `m.youtube.com`, `music.youtube.com`, `youtu.be`.
+- Extraction de l'identifiant vidéo, validé contre `^[A-Za-z0-9_-]{11}$`.
+- **L'URL n'est jamais transmise telle quelle au sidecar.** Une URL canonique est reconstruite à partir de l'identifiant validé : `https://www.youtube.com/watch?v=<ID>`. Cela neutralise par construction toute injection d'argument ou de paramètre de requête.
+- Les URL de playlist (`list=`) sont détectées ; en v1 le paramètre est ignoré et un avertissement signale que seule la vidéo est traitée (`--no-playlist` est passé à `yt-dlp`).
+
+**Sonde unique.** Une seule invocation `yt-dlp -J --no-playlist -- <URL>` (`--dump-single-json`) retourne l'ensemble des métadonnées nécessaires :
+
+| Champ | Usage |
+|---|---|
+| `title`, `channel`, `id`, `upload_date` | export JSON, nom de fichier par défaut |
+| `duration` | **calcul de la progression** (SF-04), garde `--max-duration` |
+| `is_live`, `live_status` | refus des flux en direct (SF-07) |
+| `age_limit` | message d'erreur actionnable |
+| `subtitles`, `automatic_captions` | SF-01 bis, alimente `--prefer-subs` |
+
+> **Correction v1 :** la v1 prévoyait un appel `--list-subs` distinct de la récupération des métadonnées. `-J` couvre les deux en un seul aller-retour réseau et fournit `duration`, sans lequel aucune progression fiable n'est calculable.
+
+**Sous-titres officiels.** Si `--prefer-subs` est actif et que des sous-titres existent dans la langue demandée, ils sont récupérés directement et Whisper n'est pas exécuté.
+
+- Priorité : sous-titres manuels > sous-titres auto-générés.
+- **Comportement par défaut : désactivé.** Les sous-titres auto-générés de YouTube sont dépourvus de ponctuation dans de nombreuses langues et de qualité inférieure à Whisper `small`. L'utilisateur doit les demander explicitement.
+- L'endpoint de sous-titres de YouTube est fréquemment limité en débit ou refusé (HTTP 429/403) : en cas d'échec, repli silencieux sur la transcription Whisper (sauf en sous-commande `subs`, où l'échec est remonté).
+
+### SF-02 — Pipeline d'extraction audio « zero-disk »
+
+**Aucun fichier temporaire.** L'audio transite exclusivement par des pipes anonymes et de la mémoire.
+
+**Commandes de référence (arguments, jamais une ligne de shell) :**
+
+```
+yt-dlp -q --no-warnings --no-playlist
+       -f "bestaudio[ext=webm]/bestaudio/best"
+       -o - -- "https://www.youtube.com/watch?v=<ID>"
+
+ffmpeg -hide_banner -loglevel error -nostdin
+       -i pipe:0 -vn -ar 16000 -ac 1 -c:a pcm_s16le -f s16le pipe:1
+```
+
+> **Correction v1 — `-x` supprimé.** La v1 spécifiait `yt-dlp -x -o -`. L'option `-x` (`--extract-audio`) déclenche le post-processeur `FFmpegExtractAudio`, qui requiert un fichier seekable : vers `stdout` le comportement est au mieux dégradé, au pire cassé. Elle est de surcroît **redondante**, puisque le `ffmpeg` en aval effectue déjà le décodage et le rééchantillonnage.
+
+> **Correction v1 — sélecteur de format explicite.** `[ext=webm]` privilégie Opus en conteneur WebM, lisible séquentiellement. Un `.m4a` non fragmenté dont l'atome `moov` se situe en fin de fichier fait échouer `ffmpeg` sur un pipe non-seekable. Le repli `/bestaudio/best` garantit qu'aucune vidéo n'est rejetée pour absence de piste WebM.
+
+**Câblage en Rust :**
+
+```rust
+let mut dl = Command::new(ytdlp_path)
+    .args(["-q", "--no-warnings", "--no-playlist",
+           "-f", "bestaudio[ext=webm]/bestaudio/best", "-o", "-", "--"])
+    .arg(&canonical_url)          // URL reconstruite, jamais l'entrée brute
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())       // ⚠ doit être drainé — voir ci-dessous
+    .spawn()?;
+
+let dl_out = dl.stdout.take().expect("stdout piped");
+
+let mut ff = Command::new(ffmpeg_path)
+    .args(["-hide_banner", "-loglevel", "error", "-nostdin",
+           "-i", "pipe:0", "-vn", "-ar", "16000", "-ac", "1",
+           "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"])
+    .stdin(Stdio::from(dl_out))   // câblage direct, sans shell
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()?;
+```
+
+**⚠ Règle impérative — drainage de `stderr`.** Un `stderr` configuré en `Stdio::piped()` mais jamais lu remplit le tampon du pipe (typiquement 64 Kio) et **bloque définitivement le processus enfant**. Le symptôme est pernicieux : tout fonctionne sur les vidéos courtes et se fige sur les longues. Chaque `stderr` doit être :
+
+- soit consommé par un thread dédié (recommandé : les messages sont précieux pour la taxonomie d'erreurs SF-07 — les 4 Kio les plus récents sont conservés dans un tampon circulaire),
+- soit explicitement mis à `Stdio::null()`.
+
+La même règle s'applique à la lecture de `stdout` : elle doit se faire dans un thread distinct de l'attente de terminaison des processus.
+
+**Conversion.** Les octets `s16le` sont lus par blocs depuis `stdout` et convertis à la volée en `f32` normalisés (`sample as f32 / 32768.0`), dans un `Vec<f32>` pré-alloué à partir de `duration × 16000`. Un octet impair résiduel en fin de flux est reporté sur le bloc suivant.
+
+**Terminaison.** À la fin du flux, les deux processus sont attendus (`wait()`) et leurs codes de sortie vérifiés. En cas d'interruption ([SF-07](#sf-07--taxonomie-derreurs-et-codes-de-sortie)), les deux enfants sont tués explicitement — un `yt-dlp` orphelin continuerait à télécharger.
+
+### SF-03 — Gestion et cycle de vie des modèles Whisper
+
+**Modèles pris en charge.** Format GGML pour whisper.cpp, variantes quantifiées privilégiées :
+
+| Alias | Fichier | Taille ≈ | Usage |
+|---|---|---|---|
+| `tiny` | `ggml-tiny.bin` | 75 Mo | tests, CI |
+| `base` | `ggml-base.bin` | 142 Mo | défaut CPU |
+| `small` | `ggml-small-q5_1.bin` | 190 Mo | bon compromis |
+| `medium` | `ggml-medium-q5_0.bin` | 540 Mo | |
+| `large-v3` | `ggml-large-v3-q5_0.bin` | 1,1 Go | qualité maximale, traduction |
+| `turbo` | `ggml-large-v3-turbo-q5_0.bin` | 570 Mo | **défaut GPU** |
+
+**Sélection automatique (`--model auto`, défaut).** Le modèle est choisi d'après les backends détectés : `turbo` si un backend GPU est disponible, `base` sinon. L'utilisateur garde évidemment la main.
+
+**Téléchargement à la demande.** Source : dépôt HuggingFace `ggml-org/whisper.cpp` (anciennement `ggerganov/whisper.cpp`).
+
+- **Référencement par révision épinglée**, jamais par `main` : une URL de branche n'est pas reproductible et invaliderait les empreintes.
+- Vérification d'intégrité **SHA-256** obligatoire contre une table embarquée dans le binaire. Un fichier dont l'empreinte diffère est supprimé et l'opération échoue (code 30).
+- Téléchargement vers un fichier temporaire `.part` dans le répertoire cible, puis renommage atomique — un `Ctrl-C` pendant le téléchargement ne laisse jamais un modèle tronqué qui serait ensuite considéré comme valide.
+- Timeouts explicites : 30 s à la connexion, 60 s d'inactivité. Reprise sur `Range` si le serveur la supporte.
+- Barre de progression sur `stderr`.
+
+**Modèle VAD.** Le modèle Silero utilisé par [SF-04](#sf-04--moteur-de-transcription-locale) (`ggml-silero-v5.1.2.bin`, ≈ 2 Mo) suit le même cycle de vie et est téléchargé à la première utilisation.
+
+**Répertoire de cache.** Résolu via la crate `directories` :
+
+| Plateforme | Chemin |
+|---|---|
+| Linux | `~/.cache/scripta/models/` |
+| macOS | `~/Library/Caches/scripta/models/` |
+| Windows | `%LOCALAPPDATA%\scripta\models\` |
+
+Surchargeable par `SCRIPTA_MODELS_DIR`. Géré par `scripta models {list,pull,rm,path}`.
+
+### SF-04 — Moteur de transcription locale
+
+**Configuration d'inférence.**
+
+- Langue source : détection automatique par défaut, ou code ISO 639-1 forcé (`fr`, `en`, …).
+- `--translate` : traduction vers l'anglais.
+  **⚠ Incompatibilité : `--translate` est refusé avec `--model turbo`.** `large-v3-turbo` a été entraîné pour la transcription seule ; sa sortie en mode traduction est inexploitable. La CLI rejette la combinaison avec un message explicite suggérant `large-v3`.
+- `--threads` : défaut = nombre de cœurs **physiques** (`num_cpus::get_physical()`). Sans effet notable lorsqu'un backend GPU est actif.
+- `--word-timestamps` : horodatage au mot (`token_timestamps`), nécessaire au JSON enrichi.
+
+**VAD (détection d'activité vocale) — activé par défaut.**
+
+> **Ajout v2.** Absent de la v1. C'est le levier le plus rentable sur la qualité perçue : Whisper hallucine en boucle sur les silences prolongés, les génériques musicaux et les bruits de fond — typiquement en répétant une phrase d'abonnement ou de remerciement. Le VAD Silero de whisper.cpp élimine l'essentiel de ces artefacts et réduit au passage le temps d'inférence sur les contenus peu denses.
+
+Paramètres complémentaires exposés : `no_speech_thold`, `entropy_thold`, désactivable par `--no-vad`.
+
+**`--initial-prompt`.**
+
+> **Ajout v2.** Levier de qualité majeur et quasi gratuit : fournir un contexte (noms propres, jargon, acronymes du domaine) améliore sensiblement la transcription des termes rares. À exposer en CLI comme en GUI.
+
+**Progression et restitution.**
+
+| Mécanisme | Usage |
+|---|---|
+| `progress_callback` | pourcentage global → barre de progression CLI / GUI |
+| `new_segment_callback` | émission des segments au fil de l'eau → affichage progressif GUI |
+| `abort_callback` | **annulation en cours d'inférence** |
+
+> **Ajout v2 — annulation.** La v1 ne couvrait que `SIGINT` sur les sous-processus, ce qui ne résout rien pendant un `whisper_full` déjà lancé depuis plusieurs minutes. whisper.cpp expose un `abort_callback` interrogé entre les fenêtres de traitement. **Vérifier son exposition par la version de `whisper-rs` retenue — c'est un critère de sélection de la dépendance**, au même titre que le chargement dynamique des backends ([ADR-001](#adr-001--stratégie-daccélération-matérielle)).
+
+La progression combine la durée connue (`duration`, issue de SF-01) et l'horodatage du dernier segment émis. Une vitesse relative au temps réel (× temps réel) est affichée.
+
+### SF-05 — Formats d'exportation
+
+| Format | Contenu |
+|---|---|
+| `txt` | Transcription continue, nettoyée, sans horodatage. |
+| `srt` / `vtt` | Segments horodatés respectant les contraintes de lisibilité. |
+| `json` | Document structuré complet. |
+
+**Contraintes de lisibilité des sous-titres** (paramétrables) :
+
+- `--max-line-width` (défaut **42** caractères) — segmentation sur les frontières de mots.
+- `--max-line-count` (défaut **2** lignes par cue).
+- Durée d'affichage : minimum 1,0 s, maximum 7,0 s ; les segments trop longs sont scindés sur les horodatages de mots lorsqu'ils sont disponibles.
+- Échappement conforme : entités XML pour WebVTT, numérotation séquentielle et virgule décimale pour SRT (`00:00:12,500`), point pour VTT (`00:00:12.500`).
+
+**Schéma JSON :**
+
+```json
+{
+  "schema_version": 1,
+  "source": {
+    "url": "https://www.youtube.com/watch?v=...",
+    "video_id": "...", "title": "...", "channel": "...",
+    "duration_s": 1834.0, "upload_date": "2025-11-04"
+  },
+  "transcription": {
+    "engine": "whisper.cpp", "model": "large-v3-turbo-q5_0",
+    "backend": "vulkan", "language": "fr", "language_probability": 0.98,
+    "translated": false, "vad": true,
+    "duration_ms": 214300, "speed_realtime": 8.6
+  },
+  "segments": [
+    {
+      "id": 0, "start": 12.50, "end": 15.00,
+      "text": "Bonjour à tous et bienvenue dans ce nouvel épisode.",
+      "no_speech_prob": 0.01, "avg_logprob": -0.23,
+      "words": [ { "word": "Bonjour", "start": 12.50, "end": 12.91, "probability": 0.99 } ]
+    }
+  ]
+}
+```
+
+Le champ `words` n'est présent que si `--word-timestamps` est actif. `schema_version` permet l'évolution sans casser les consommateurs.
+
+**Sortie standard.** Lorsque `--output` est omis, le résultat est écrit sur `stdout`. **Toute progression, tout log et toute barre d'avancement vont sur `stderr`** — `scripta <URL> -f json | jq` doit fonctionner sans `--quiet`.
+
+### SF-06 — Maintenance du sidecar `yt-dlp`
+
+YouTube modifie fréquemment ses mécanismes d'extraction : un `yt-dlp` embarqué est périmé quelques semaines après la publication d'une version de Scripta. La mise à jour n'est donc pas un confort mais une condition de fonctionnement.
+
+- Commande CLI `scripta update-extractor`, bouton équivalent en GUI.
+- **Conformément à [ADR-004](#adr-004--emplacement-des-sidecars-mis-à-jour), la mise à jour écrit exclusivement dans `<data_dir>/scripta/bin/` et ne touche jamais au bundle signé.** Le mécanisme interne `yt-dlp -U` n'est donc **pas** utilisé sur la copie embarquée ; la dernière version est téléchargée depuis les *releases* GitHub de yt-dlp, vérifiée, puis installée à l'emplacement inscriptible.
+- Vérification d'intégrité contre le fichier `SHA2-256SUMS` publié avec chaque release.
+- Sur macOS, le binaire téléchargé reçoit une signature ad-hoc (`codesign -s -`) et l'attribut de quarantaine est retiré, faute de quoi il ne s'exécutera pas sur Apple Silicon.
+- Vérification de disponibilité au démarrage, au plus une fois par période de 24 h, sans blocage et sans télémétrie. Désactivable par `SCRIPTA_NO_UPDATE_CHECK=1`.
+
+### SF-07 — Taxonomie d'erreurs et codes de sortie
+
+> **Ajout v2.** Entièrement absent de la v1. C'est pourtant le premier poste de contact avec la réalité d'exploitation : la majorité des échecs de ce type d'outil ne sont pas des bugs mais des conditions attendues de la plateforme, qui doivent produire un diagnostic actionnable plutôt qu'une trace de panique.
+
+`core::error::ScriptaError` est un énuméré exhaustif. Chaque variante porte un message utilisateur explicite et un code de sortie stable, contractuel pour les scripts.
+
+| Code | Variante | Message utilisateur (résumé) | Détection |
+|---:|---|---|---|
+| 0 | — | Succès | |
+| 2 | `Usage` | Arguments invalides | clap |
+| 10 | `InvalidUrl` | URL non reconnue ou domaine non supporté | validation locale |
+| 11 | `Unavailable` | Vidéo privée, supprimée, géo-bloquée ou réservée aux membres | motif dans `stderr` de yt-dlp |
+| 12 | `AuthRequired` | Connexion requise (vérification anti-robot ou limite d'âge) — voir `--cookies-from-browser` | idem |
+| 13 | `LiveNotSupported` | Diffusion en direct non prise en charge | `is_live` de la sonde `-J` |
+| 14 | `TooLong` | Durée supérieure à `--max-duration` | `duration` de la sonde |
+| 20 | `ExtractionFailed` | Échec de l'extraction audio (yt-dlp/ffmpeg) | code de sortie ≠ 0 |
+| 21 | `SidecarMissing` | Binaire `yt-dlp` ou `ffmpeg` introuvable — voir `scripta doctor` | résolution de chemin |
+| 30 | `ModelUnavailable` | Modèle indisponible, téléchargement échoué ou empreinte invalide | SF-03 |
+| 40 | `InferenceFailed` | Échec de l'inférence (mémoire insuffisante, backend défaillant) | whisper-rs |
+| 50 | `OutputFailed` | Écriture du fichier de sortie impossible | E/S |
+| 130 | `Interrupted` | Interrompu par l'utilisateur | `SIGINT` (convention 128 + 2) |
+
+**Cas particuliers dignes d'attention :**
+
+- **Code 12 — « Sign in to confirm you're not a bot ».** C'est aujourd'hui l'échec le plus fréquent en conditions réelles, en particulier depuis des adresses IP de centres de données. Le message doit orienter vers `--cookies-from-browser` ([SF-09](#sf-09--authentification-et-confidentialité)) plutôt que de laisser l'utilisateur face à une erreur opaque.
+- **Code 13 — flux en direct.** Un live produit un flux de durée non bornée : sans ce garde-fou, le `Vec<f32>` croît jusqu'à épuisement de la mémoire. La détection se fait **avant** l'extraction, à partir de la sonde métadonnées.
+
+**Diagnostic.** `scripta doctor` vérifie et affiche : sidecars résolus et leurs versions, backends ggml détectés, modèles en cache, chemins et droits d'écriture, connectivité vers HuggingFace et YouTube.
+
+### SF-08 — Cache de transcriptions
+
+> **Ajout v2.** Retraiter une vidéo déjà transcrite est fréquent (changement de format d'export, réglage des sous-titres, erreur de manipulation) et coûte plusieurs minutes d'inférence pour rien.
+
+- Clé : `sha256(video_id ‖ model_id ‖ lang ‖ translate ‖ vad ‖ word_timestamps)`.
+- Contenu stocké : le JSON complet (SF-05), dont tous les autres formats se dérivent sans réinférence.
+- Emplacement : `<cache_dir>/scripta/transcripts/`.
+- Contournement par `--no-cache` ; administration par `scripta cache {list,clear,path}`.
+- Éviction : LRU au-delà d'un plafond configurable (défaut 2 Go).
+
+### SF-09 — Authentification et confidentialité
+
+> **Ajout v2.** La v1 affirmait « aucune fuite de données » sans traiter le fait qu'une partie croissante des vidéos exige désormais une session authentifiée. Les deux exigences sont en tension et l'arbitrage doit être explicite.
+
+- `--cookies-from-browser <navigateur>` transmet l'option homonyme à `yt-dlp`, qui lit les cookies du navigateur local.
+- **Désactivé par défaut**, et jamais activé automatiquement.
+- Les cookies ne transitent **que** vers `youtube.com`, uniquement dans le processus `yt-dlp`, ne sont jamais écrits sur disque par Scripta, jamais journalisés, jamais inclus dans un rapport d'erreur.
+- La GUI affiche un avertissement explicite avant la première activation.
+- **Invariant maintenu :** aucun segment transcrit, aucune URL, aucun identifiant utilisateur ne quitte la machine. Les seules destinations réseau autorisées sont `youtube.com` (via yt-dlp), `huggingface.co` (modèles) et `github.com` (mise à jour du sidecar).
+
+---
+
+## 4. Spécifications des interfaces
+
+### 4.1 Interface en ligne de commande
+
+> **Correction v1.** La v1 plaçait `--update-extractor` parmi les options d'une commande exigeant un `<URL>` positionnel obligatoire : la combinaison est impossible à exprimer en clap sans conflit. L'architecture passe en sous-commandes, avec `run` implicite pour préserver la concision d'usage.
+
+```
+USAGE:
+    scripta [OPTIONS] <URL>          # équivaut à `scripta run`
+    scripta <COMMANDE> [OPTIONS]
+
+COMMANDES:
+    run                  Transcrit une URL YouTube (commande par défaut)
+    subs                 Récupère uniquement les sous-titres officiels
+    models               Gère le cache de modèles (list | pull | rm | path)
+    cache                Gère le cache de transcriptions (list | clear | path)
+    update-extractor     Met à jour le binaire yt-dlp
+    doctor               Diagnostic système (backends, sidecars, modèles)
+    help                 Affiche l'aide
+
+OPTIONS DE `run` :
+    -m, --model <NAME>          Modèle [défaut: auto]
+                                [auto, tiny, base, small, medium, large-v3, turbo]
+    -l, --lang <CODE>           Langue forcée (fr, en, es, …) [défaut: auto]
+        --translate             Traduit vers l'anglais (incompatible avec --model turbo)
+    -f, --format <FORMAT>       Format de sortie [défaut: txt] [txt, srt, vtt, json]
+    -o, --output <PATH>         Fichier de sortie [défaut: stdout]
+    -t, --threads <NUM>         Threads CPU [défaut: cœurs physiques]
+        --backend <BACKEND>     [défaut: auto] [auto, cpu, vulkan, metal, cuda]
+        --vad / --no-vad        Détection d'activité vocale [défaut: activée]
+        --initial-prompt <TXT>  Contexte (noms propres, jargon) pour guider le modèle
+        --word-timestamps       Horodatage au mot (requis pour un JSON enrichi)
+        --prefer-subs           Utilise les sous-titres officiels s'ils existent
+        --max-line-width <N>    Largeur de ligne des sous-titres [défaut: 42]
+        --max-line-count <N>    Lignes par cue [défaut: 2]
+        --max-duration <MIN>    Refus au-delà de cette durée [défaut: 240]
+        --cookies-from-browser <NAV>   Cookies pour les vidéos restreintes
+        --no-cache              Ignore le cache de transcriptions
+    -q, --quiet                 Supprime logs et progression
+    -v, --verbose               Verbosité accrue (répétable)
+    -h, --help                  Aide
+    -V, --version               Version
+```
+
+**Contrats d'exécution :**
+
+- `stdout` ne transporte **que** le résultat ; progression, logs et avertissements vont sur `stderr`.
+- Les codes de sortie suivent la table [SF-07](#sf-07--taxonomie-derreurs-et-codes-de-sortie).
+- `SIGINT` (et `Ctrl-Break` sous Windows) : les sous-processus sont tués, l'inférence en cours est interrompue via `abort_callback`, les fichiers partiels sont supprimés, sortie en 130. Un second `SIGINT` force une terminaison immédiate.
+- La barre de progression est automatiquement désactivée si `stderr` n'est pas un terminal (CI, redirection).
+
+### 4.2 Interface de bureau (Tauri v2)
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│  Scripta                                                 [-] [□] [×]   │
+├────────────────────────────────────────────────────────────────────────┤
+│  [ https://www.youtube.com/watch?v=dQw4w9WgXcQ               ] [Coller]│
+│                                                                        │
+│  Modèle : [ Turbo (recommandé)  ▼ ]   Langue : [ Détection auto  ▼ ]   │
+│  Accélération : [● Vulkan (AMD Radeon RX 7800 XT) détectée        ▼ ]  │
+│  ▸ Options avancées  (VAD · contexte · horodatage au mot · cookies)    │
+│                                                                        │
+│  [  Démarrer la transcription  ]                                       │
+├────────────────────────────────────────────────────────────────────────┤
+│  Téléchargement audio ✓   Inférence : [███████████░░░░░] 68% (8.6×)    │
+│                                                        [  Annuler  ]   │
+├────────────────────────────────────────────────────────────────────────┤
+│  Sortie :                                                              │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │ [00:00:12.500 --> 00:00:15.000]                                  │  │
+│  │ Bonjour à tous et bienvenue dans ce nouvel épisode...            │  │
+│  │                                                                  │  │
+│  │ [00:00:15.200 --> 00:00:18.400]                                  │  │
+│  │ Aujourd'hui, nous allons étudier l'architecture système...       │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│  [Copier]                  Exporter : [ .TXT ] [ .SRT ] [ .VTT ] [JSON]│
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**Exigences d'implémentation :**
+
+- **Aucun travail bloquant sur le thread principal.** Extraction et inférence s'exécutent sur un thread dédié (`tauri::async_runtime::spawn_blocking`) ; la progression et les segments remontent par événements Tauri. Un `whisper_full` appelé directement dans une commande IPC figerait la fenêtre pendant plusieurs minutes.
+- Le bouton **Annuler** arme le drapeau lu par l'`abort_callback` et tue les sidecars ; il doit rester réactif pendant l'inférence.
+- Les sidecars sont déclarés en `externalBin` dans `tauri.conf.json`. **Rappel Tauri : les fichiers doivent porter le suffixe du triplet cible** (`yt-dlp-x86_64-pc-windows-msvc.exe`, `ffmpeg-aarch64-apple-darwin`, …), faute de quoi le bundle échoue silencieusement à embarquer le binaire.
+- L'accélération affichée provient de l'énumération des backends à l'exécution ([ADR-001](#adr-001--stratégie-daccélération-matérielle)), pas d'une constante de compilation.
+- Les segments s'affichent au fil de leur émission ; la zone de sortie suit automatiquement, sauf si l'utilisateur a fait défiler manuellement.
+
+---
+
+## 5. Exigences non fonctionnelles
+
+### 5.1 Sécurité
+
+- **Aucune concaténation shell.** Aucun `sh -c`, aucun `cmd.exe`. Tous les arguments sont passés sous forme de tableau, précédés du séparateur `--`.
+- **URL canonique reconstruite** à partir de l'identifiant validé ([SF-01](#sf-01--validation-durl-et-sonde-de-métadonnées)) : l'entrée utilisateur brute n'atteint jamais un sidecar.
+- **Chemins de sidecars résolus explicitement**, jamais recherchés via `PATH` dans le contexte GUI — cela éviterait un détournement par un binaire homonyme placé en amont du `PATH`.
+- **Vérification d'intégrité SHA-256** sur tout artefact téléchargé (modèles, mises à jour de sidecars).
+- **Timeouts réseau explicites** sur toutes les requêtes ; aucune redirection suivie vers un hôte hors liste blanche.
+- **Aucune exécution de code téléchargé** autre que les sidecars vérifiés.
+- Le chemin de sortie utilisateur est vérifié avant écriture (pas d'écrasement silencieux d'un fichier existant sans `--force`).
+
+### 5.2 Performance
+
+> **Ajout v2.** La v1 comportait une section performance sans aucune valeur chiffrée, donc non testable. Les seuils ci-dessous sont des **minima d'acceptation** mesurés sur un échantillon de référence de 10 minutes d'audio parlé en français, à valider et ajuster au [Jalon 2](ROADMAP.md#jalon-2--robustesse-cli).
+
+| Configuration | Modèle | Seuil |
+|---|---|---|
+| CPU x86_64, 8 cœurs, AVX2 | `base` | ≥ 3 × temps réel |
+| CPU x86_64, 8 cœurs, AVX2 | `small` | ≥ 1,5 × temps réel |
+| Apple Silicon M1+, Metal | `turbo` | ≥ 8 × temps réel |
+| GPU discret ≥ 6 Go VRAM, Vulkan | `turbo` | ≥ 8 × temps réel |
+
+**Autres seuils :**
+
+| Métrique | Seuil |
+|---|---|
+| Empreinte RSS, 1 h d'audio, modèle `small` | < 1,2 Go |
+| Empreinte audio brute | ≈ 230 Mo / h ([ADR-003](#adr-003--inférence-non-streamée)) |
+| Démarrage CLI (`--version`, `--help`) | < 150 ms |
+| Sonde de métadonnées (SF-01) | < 3 s en conditions nominales |
+| Écritures disque hors sortie et caches | **0 octet** (invariant « zero-disk ») |
+
+L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le répertoire temporaire pendant un test d'intégration et vérifier qu'aucun fichier n'y apparaît.
+
+### 5.3 Compatibilité
+
+| Plateforme | Cible | Version minimale |
+|---|---|---|
+| Linux | `x86_64-unknown-linux-gnu` | glibc 2.31 (Ubuntu 20.04) |
+| Windows | `x86_64-pc-windows-msvc` | Windows 10 1809 |
+| macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | macOS 11 |
+
+### 5.4 Distribution et packaging
+
+| Plateforme | CLI | GUI |
+|---|---|---|
+| Linux | tarball `.tar.gz` | AppImage + `.deb` |
+| Windows | `.exe` autonome | installeur NSIS |
+| macOS | binaire universel | `.dmg` signé et notarisé |
+
+- Les sidecars `yt-dlp` et `ffmpeg` sont embarqués dans les bundles GUI. Pour la CLI, ils sont **recherchés sur le système puis téléchargés à la demande** dans `<data_dir>/scripta/bin/` — embarquer 70 Mo de FFmpeg dans un binaire CLI contredirait l'objectif de légèreté.
+- **Build FFmpeg minimal** : seuls les décodeurs (`opus`, `vorbis`, `aac`, `mp3`), démultiplexeurs (`matroska`, `mov`, `mp3`) et le rééchantillonneur sont nécessaires. Une build ciblée descend autour de 10–15 Mo, contre 60–70 Mo pour une build complète.
+- Sur macOS, **tous** les binaires du bundle — application et sidecars — doivent être signés et notarisés ensemble, avec les droits d'exécution appropriés.
+- Chaque release publie un fichier de sommes de contrôle et la liste des versions de sidecars embarquées.
+
+### 5.5 Stratégie de test
+
+> **Ajout v2.** Absente de la v1. La difficulté propre à ce projet est que le chemin nominal traverse le réseau, un service tiers instable et du calcul non déterministe : sans découplage explicite, aucun test n'est exécutable en CI.
+
+| Niveau | Portée | Exécution en CI |
+|---|---|---|
+| **Unitaire** | Validation d'URL (corpus d'URL valides et malveillantes), conversion `s16le → f32`, découpage des cues, formatage des horodatages | ✅ |
+| **Golden file** | Formateurs `txt`/`srt`/`vtt`/`json` à partir d'un jeu de segments figé | ✅ |
+| **Sidecar simulé** | Faux `yt-dlp` et `ffmpeg` (scripts) émettant un PCM connu, ou un code d'erreur donné, ou **rien tout en écrivant massivement sur `stderr`** — c'est le test de non-régression du deadlock [SF-02](#sf-02--pipeline-dextraction-audio--zero-disk-) | ✅ |
+| **Intégration locale** | WAV de référence (30 s) → modèle `tiny` → transcription ; assertion sur le WER et non sur une égalité de chaîne | ✅ (CPU) |
+| **Taxonomie d'erreurs** | Chaque variante de `ScriptaError` atteignable via un sidecar simulé, vérification du code de sortie | ✅ |
+| **Réseau** | Chemin réel sur une vidéo stable, marqué `#[ignore]` | ⚠️ tâche planifiée quotidienne, hors CI de PR |
+| **Performance** | Seuils du [§5.2](#52-performance) sur un runner de référence | ⚠️ non bloquant, suivi de tendance |
+
+**Principes :**
+
+- **Aucun test de la CI de PR ne touche le réseau.** YouTube est instable et bloque les adresses de centres de données : une CI qui en dépend devient rouge sans lien avec le code.
+- La vérification des extracteurs se fait par une **tâche planifiée quotidienne** qui transcrit une vidéo de référence ; son échec signale une rupture côté YouTube, pas une régression de Scripta.
+- Les assertions d'inférence portent sur un taux d'erreur sur les mots (WER) sous un seuil, jamais sur une égalité exacte — la sortie varie entre backends et versions de ggml.
+
+---
+
+## Annexe A — Résumé des corrections apportées à la v1
+
+| # | Objet | Nature |
+|---|---|---|
+| 1 | `yt-dlp -x -o -` | **Erreur** — `-x` invoque un post-processeur incompatible avec `stdout`, et redondant avec ffmpeg en aval |
+| 2 | Sélecteur de format audio | **Robustesse** — `[ext=webm]` évite l'échec sur MP4 non seekable |
+| 3 | Pipeline shell vs interdiction du shell | **Contradiction interne** — résolue par [ADR-002](#adr-002--pipeline-audio-sans-shell) |
+| 4 | Drainage de `stderr` | **Deadlock** — non mentionné en v1, se manifeste uniquement sur les vidéos longues |
+| 5 | Backend compilé vs détecté | **Contradiction interne** (§5.2 vs maquette GUI) — résolue par [ADR-001](#adr-001--stratégie-daccélération-matérielle) |
+| 6 | `yt-dlp -U` in-place | **Erreur** — invalide la signature macOS, échoue dans `Program Files` — résolue par [ADR-004](#adr-004--emplacement-des-sidecars-mis-à-jour) |
+| 7 | « Streaming » vers Whisper | **Imprécision** — `whisper_full` n'est pas incrémental — clarifiée par [ADR-003](#adr-003--inférence-non-streamée) |
+| 8 | `turbo` + `--translate` | **Erreur fonctionnelle** — turbo ne traduit pas |
+| 9 | `--update-extractor` + `<URL>` requis | **Erreur** — conflit clap — passage en sous-commandes |
+| 10 | Deux sondes réseau | **Optimisation** — `-J` remplace `--list-subs` et fournit `duration` |
+| 11 | `src-tauri/` à la racine | **Cohérence** — devient `crates/desktop/` |
+| 12 | `yt-transcribe` vs `Scripta` | **Cohérence** — nom unifié |
+
+## Annexe B — Ajouts v2
+
+| # | Objet | Section |
+|---|---|---|
+| 1 | Taxonomie d'erreurs et codes de sortie | [SF-07](#sf-07--taxonomie-derreurs-et-codes-de-sortie) |
+| 2 | Refus des diffusions en direct | [SF-07](#sf-07--taxonomie-derreurs-et-codes-de-sortie) |
+| 3 | Vérification anti-robot / cookies | [SF-09](#sf-09--authentification-et-confidentialité) |
+| 4 | VAD Silero activé par défaut | [SF-04](#sf-04--moteur-de-transcription-locale) |
+| 5 | `--initial-prompt` | [SF-04](#sf-04--moteur-de-transcription-locale) |
+| 6 | Annulation en cours d'inférence (`abort_callback`) | [SF-04](#sf-04--moteur-de-transcription-locale) |
+| 7 | Cache de transcriptions | [SF-08](#sf-08--cache-de-transcriptions) |
+| 8 | Stratégie de test | [§5.5](#55-stratégie-de-test) |
+| 9 | Seuils de performance chiffrés | [§5.2](#52-performance) |
+| 10 | Périmètre et non-objectifs explicites | [§1.2](#12-périmètre-et-non-objectifs) |
+| 11 | Commande `doctor` | [SF-07](#sf-07--taxonomie-derreurs-et-codes-de-sortie) |
+| 12 | Gestion des playlists | [SF-01](#sf-01--validation-durl-et-sonde-de-métadonnées) |
+| 13 | Contraintes de lisibilité des sous-titres paramétrables | [SF-05](#sf-05--formats-dexportation) |
+| 14 | Build FFmpeg minimal | [§5.4](#54-distribution-et-packaging) |
+| 15 | Incompatibilité GPLv3 / App Store, avertissement CGU | [§1.3](#13-licence-et-conformité) |
+
+## Annexe C — Journal des corrections
+
+**v2.0** — Révision complète. 12 corrections (Annexe A) et 15 ajouts (Annexe B). Introduction de quatre ADR pour figer les décisions structurantes. Nom du binaire unifié en `scripta`.
+
+**v1.0** — Cahier des charges initial.
+
+## Annexe D — Points à valider en implémentation
+
+Ces points reposent sur des hypothèses à confirmer dès le [Jalon 0](ROADMAP.md#jalon-0--dérisquage) ; chacun dispose d'un repli identifié.
+
+| Hypothèse | Repli si invalidée |
+|---|---|
+| `whisper-rs` expose `abort_callback` | Contribuer le binding en amont, ou vendorer le crate |
+| `whisper-rs` supporte le chargement dynamique des backends ggml | Deux artefacts par plateforme (`scripta` / `scripta-gpu`) |
+| Le VAD Silero est accessible depuis `whisper-rs` | VAD en amont via un crate Rust dédié, appliqué au `Vec<f32>` |
+| Vulkan atteint les seuils du [§5.2](#52-performance) | Réintroduire une build CUDA distribuée pour Windows/Linux |
+| Une build FFmpeg minimale ≤ 15 Mo est atteignable | Accepter 60–70 Mo, ou étudier un décodage Opus natif en Rust (v2 — le support Opus de `symphonia` est à vérifier, un binding `libopus` reste l'option sûre) |
