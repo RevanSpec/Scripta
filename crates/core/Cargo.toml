@@ -12,6 +12,7 @@ url.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+whisper-rs = "0.16"
 
 # Fixture de test : sidecar simulé (yt-dlp / ffmpeg) piloté par variables
 # d'environnement. Déclaré en binaire du paquet pour que `cargo test` expose
@@ -20,6 +21,14 @@ thiserror.workspace = true
 [[bin]]
 name = "scripta-fake-sidecar"
 path = "src/bin/fake_sidecar.rs"
+
+[features]
+default = []
+# ADR-001 révisé (J0) : whisper-rs-sys 0.15 lie les backends à la COMPILATION.
+# Le chargement dynamique ggml n'est pas exposé : un artefact par backend.
+vulkan = ["whisper-rs/vulkan"]
+cuda = ["whisper-rs/cuda"]
+metal = ["whisper-rs/metal"]
 
 [dev-dependencies]
 tempfile = "3"

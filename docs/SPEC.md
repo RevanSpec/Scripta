@@ -299,7 +299,12 @@ La même règle s'applique à la lecture de `stdout` : elle doit se faire dans u
 
 **Sélection automatique (`--model auto`, défaut).** Le modèle est choisi d'après les backends détectés : `turbo` si un backend GPU est disponible, `base` sinon. L'utilisateur garde évidemment la main.
 
-**Téléchargement à la demande.** Source : dépôt HuggingFace `ggml-org/whisper.cpp` (anciennement `ggerganov/whisper.cpp`).
+**Téléchargement à la demande.** Source : dépôt HuggingFace **`ggerganov/whisper.cpp`**.
+
+> **Corrigé au Jalon 1.** La v2.0 indiquait `ggml-org/whisper.cpp`. Vérification
+> faite, cette adresse renvoie **HTTP 401** en accès anonyme, tandis que
+> `ggerganov/whisper.cpp` sert les modèles sans authentification. L'erreur aurait
+> bloqué la tâche 2.3 dès sa première exécution.
 
 - **Référencement par révision épinglée**, jamais par `main` : une URL de branche n'est pas reproductible et invaliderait les empreintes.
 - Vérification d'intégrité **SHA-256** obligatoire contre une table embarquée dans le binaire. Un fichier dont l'empreinte diffère est supprimé et l'opération échoue (code 30).

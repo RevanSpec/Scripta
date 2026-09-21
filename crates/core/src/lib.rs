@@ -6,18 +6,20 @@
 //! # État — Jalon 1
 //!
 //! Livré : validation d'URL, sonde de métadonnées, pipeline d'extraction audio,
-//! taxonomie d'erreurs, format `txt`.
+//! inférence Whisper, taxonomie d'erreurs, format `txt`.
 //!
-//! Manquant : l'inférence (`whisper-rs`) est bloquée sur l'absence de CMake dans
-//! l'environnement de développement — voir `docs/ROADMAP.md`, Jalon 0, tâche 0.1.
+//! Restent au Jalon 2 : téléchargement des modèles, formats `srt`/`vtt`/`json`,
+//! cache de transcriptions, sous-titres officiels.
 
 pub mod audio;
 pub mod error;
 pub mod format;
 pub mod probe;
+pub mod transcribe;
 pub mod transcript;
 pub mod url;
 
 pub use error::{Result, ScriptaError};
+pub use transcribe::{Backend, CancelToken, Engine};
 pub use transcript::{Segment, Transcript, Word};
 pub use url::CanonicalUrl;

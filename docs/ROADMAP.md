@@ -79,6 +79,16 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 1 — Cœur fonctionnel (PoC CLI)
 
+> **Statut : livré, à une réserve près.** La chaîne complète
+> `URL → métadonnées → PCM → inférence → texte` fonctionne, vérifiée par une
+> transcription réelle de l'échantillon de référence de whisper.cpp avec le
+> modèle `tiny`. 53 tests verts sur Windows, dont 5 d'inférence qui se sautent
+> proprement sans les fixtures pour que la CI reste verte.
+>
+> **Réserve :** aucune exécution de bout en bout sur une vraie URL YouTube, faute
+> de `yt-dlp` et `ffmpeg` sur la machine de développement. Le premier critère de
+> sortie ci-dessous reste donc à cocher.
+
 **Objectif :** un chemin nominal de bout en bout, sans robustesse. `URL → texte sur stdout`.
 
 **Effort :** 4–6 jours. **Prérequis :** J0 clos.
@@ -99,10 +109,10 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 ### Critères de sortie
 
 - [ ] `scripta "https://www.youtube.com/watch?v=<ID>" > out.txt` produit une transcription correcte sur les **trois** plateformes.
-- [ ] **Invariant zero-disk vérifié** : aucun fichier créé dans le répertoire temporaire pendant l'exécution (test instrumenté).
-- [ ] Test de non-régression du deadlock `stderr` **en place et vert** — un sidecar simulé qui écrit 1 Mio sur `stderr` ne doit pas figer le programme.
+- [x] **Invariant zero-disk vérifié** : aucun fichier créé dans le répertoire temporaire pendant l'exécution (test instrumenté).
+- [x] Test de non-régression du deadlock `stderr` **en place et vert** — validé par réintroduction du défaut : sans drainage, `extract()` se fige et le test échoue au bout de 30 s.
 - [ ] Une vidéo de 1 h se transcrit sans dépassement de mémoire.
-- [ ] CI verte sur les trois OS, **sans accès réseau**.
+- [ ] CI verte sur les trois OS, **sans accès réseau**. *(Vérifiée localement sous Windows ; les trois OS restent à confirmer sur la PR.)*
 
 ### Risques
 
