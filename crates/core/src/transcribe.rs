@@ -123,6 +123,20 @@ impl CancelToken {
     }
 }
 
+/// Trampoline du rappel d'abandon, appelé par ggml depuis le code natif.
+///
+/// # Sécurité
+///
+/// `user_data` doit être un pointeur obtenu par `Arc::into_raw` sur un
+/// `Arc<AtomicBool>` encore vivant. [`Engine::transcribe`] en garantit la
+/// validité sur toute la durée de l'appel à `full()` et le reprend ensuite.
+unsafe extern "C" fn abort_trampoline(user_data: *mut std::ffi::c_void) -> bool {
+    if user_data.is_null() {
+        return false;
+    }
+    unsafe { (*(user_data as *const AtomicBool)).load(Ordering::SeqCst) }
+}
+
 /// Rappels de progression — SPEC SF-04.
 #[derive(Default)]
 pub struct Hooks {
@@ -251,15 +265,39 @@ impl Engine {
             params.set_progress_callback_safe(move |p: i32| cb(p));
         }
 
-        // Le jeton est cloné dans la fermeture : l'appelant conserve le sien
-        // pour armer l'annulation depuis un autre thread pendant que
-        // `full()` bloque ici.
-        let cancel_for_check = cancel.clone();
-        if let Some(token) = cancel {
-            params.set_abort_callback_safe(move || token.is_cancelled());
+        // ⚠ `set_abort_callback_safe` est INUTILISABLE en whisper-rs 0.16.0 :
+        // il place dans `user_data` un `Box<dyn FnMut() -> bool>` — un pointeur
+        // gras — mais instancie son trampoline avec le type concret `F` de la
+        // fermeture. Le pointeur est donc réinterprété comme une autre
+        // structure : confusion de types et comportement indéfini. En pratique
+        // le rappel renvoie n'importe quoi, et une valeur vraie fait échouer
+        // l'encodage avec le code -6 (`failed to encode`).
+        //
+        // On passe donc par l'API brute avec un trampoline correctement typé
+        // sur un pointeur FIN vers l'`AtomicBool`, ce qui écarte le problème par
+        // construction. À retirer si le correctif est accepté en amont.
+        let cancel_raw: Option<*const AtomicBool> =
+            cancel.as_ref().map(|t| Arc::into_raw(Arc::clone(&t.0)));
+
+        if let Some(raw) = cancel_raw {
+            // SÉCURITÉ : `raw` reste vivant jusqu'à sa reprise après `full()`,
+            // et le trampoline ne fait qu'y lire un booléen atomique.
+            unsafe {
+                params.set_abort_callback(Some(abort_trampoline));
+                params.set_abort_callback_user_data(raw as *mut std::ffi::c_void);
+            }
         }
 
         let issue = state.full(params, samples);
+
+        // Reprise du compteur de références cédé à `Arc::into_raw`. À faire
+        // impérativement après `full()` : le code natif lit ce pointeur
+        // pendant tout l'appel.
+        if let Some(raw) = cancel_raw {
+            // SÉCURITÉ : `raw` provient d'un `Arc::into_raw` de cette fonction
+            // et n'est repris qu'une fois.
+            drop(unsafe { Arc::from_raw(raw) });
+        }
 
         // L'annulation prime sur l'erreur remontée, et doit être testée avant
         // elle : whisper.cpp signale l'abandon tantôt par un code d'erreur,
@@ -267,7 +305,7 @@ impl Engine {
         // en `InferenceFailed` ferait passer une annulation volontaire pour une
         // panne, et le second livrerait une transcription tronquée présentée
         // comme complète.
-        if cancel_for_check.map(|t| t.is_cancelled()).unwrap_or(false) {
+        if cancel.map(|t| t.is_cancelled()).unwrap_or(false) {
             return Err(ScriptaError::Interrupted);
         }
 

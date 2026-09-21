@@ -134,6 +134,15 @@ fn main() -> ExitCode {
     }
 }
 
+/// Sous la minute, afficher « 0 min » est absurde.
+fn format_duree(secondes: f64) -> String {
+    if secondes < 60.0 {
+        format!("{secondes:.0} s")
+    } else {
+        format!("{:.0} min", secondes / 60.0)
+    }
+}
+
 fn parse_format(s: &str) -> Result<scripta_core::format::OutputFormat, String> {
     s.parse()
 }
@@ -165,7 +174,7 @@ fn run(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
     if !args.quiet {
         let duree = meta
             .duration
-            .map(|d| format!("{:.0} min", d / 60.0))
+            .map(format_duree)
             .unwrap_or_else(|| "durée inconnue".to_string());
         eprintln!("« {} » — {duree}", meta.title);
     }
@@ -283,6 +292,18 @@ fn doctor() -> scripta_core::Result<()> {
         );
     }
 
-    println!("  {:<10} non intégré (Jalon 1, tâche 1.5)", "whisper");
+    println!(
+        "  {:<10} whisper.cpp, backend « {} »",
+        "inférence",
+        scripta_core::Backend::compiled().as_str()
+    );
+
+    match std::env::var_os("SCRIPTA_MODELS_DIR") {
+        Some(d) => println!("  {:<10} {}", "modèles", PathBuf::from(d).display()),
+        None => println!(
+            "  {:<10} SCRIPTA_MODELS_DIR non défini (téléchargement automatique : Jalon 2)",
+            "modèles"
+        ),
+    }
     Ok(())
 }

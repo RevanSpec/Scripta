@@ -172,6 +172,35 @@ fn la_progression_est_rapportee() {
     );
 }
 
+/// Un jeton **vivant mais non armé** ne doit pas interrompre l'inférence.
+///
+/// Ce cas n'était couvert par aucun test — tous passaient `cancel: None` ou un
+/// jeton pré-annulé — et c'est précisément lui qui échouait : le binding
+/// `set_abort_callback_safe` de whisper-rs 0.16.0 confond les types et faisait
+/// renvoyer n'importe quoi au rappel, avortant l'encodage avec le code -6. Sans
+/// ce test, le défaut ne se voyait que sur une exécution réelle.
+#[test]
+fn un_jeton_non_arme_n_interrompt_pas() {
+    let f = fixtures_or_skip!();
+
+    let transcript = f
+        .engine
+        .transcribe(
+            &f.samples,
+            &Options::default(),
+            Hooks {
+                on_progress: None,
+                cancel: Some(CancelToken::new()), // vivant, jamais armé
+            },
+        )
+        .expect("un jeton non armé ne doit pas faire échouer l'inférence");
+
+    assert!(
+        !transcript.is_empty(),
+        "transcription vide alors que l'annulation n'a pas été demandée"
+    );
+}
+
 /// L'annulation doit produire `Interrupted`, jamais une transcription tronquée
 /// présentée comme complète (SPEC SF-04).
 #[test]
