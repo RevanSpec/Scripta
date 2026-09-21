@@ -1,7 +1,7 @@
 # Scripta — Cahier des charges technique et fonctionnel
 
-**Version :** 2.0
-**Statut :** Validé pour implémentation
+**Version :** 2.1
+**Statut :** Validé pour implémentation — ADR-001 révisé au Jalon 0
 **Révision précédente :** 1.0 (voir [Annexe C — Journal des corrections](#annexe-c--journal-des-corrections))
 
 ---
@@ -82,8 +82,8 @@ Le cœur applicatif et les interfaces sont développés en Rust. L'extraction r�
  │        Sidecars externes      │  │  whisper-rs (ggml/C++)   │
  │  yt-dlp  ──►  ffmpeg          │  │  Inférence IA locale     │
  │  (WebM/Opus)  (PCM s16le      │  │  Vulkan / Metal / CPU    │
- │               16 kHz mono)    │  │  Backends chargés à      │
- │                               │  │  l'exécution (ADR-001)   │
+ │               16 kHz mono)    │  │  Backend lié à la        │
+ │                               │  │  compilation (ADR-001)   │
  └───────────────────────────────┘  └──────────────────────────┘
 ```
 
@@ -139,22 +139,33 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
 
 **Contexte.** La v1 du cahier des charges contenait une contradiction : le §5.2 décrivait une *compilation conditionnelle* des backends (`cuda`, `metal`, AVX2), tandis que la maquette GUI affichait « CUDA (NVIDIA RTX 4070) détectée », ce qui suppose une *détection à l'exécution*. Les deux sont incompatibles : un binaire lié statiquement à CUDA **ne démarre pas** sur une machine dépourvue de driver NVIDIA — l'éditeur de liens dynamique échoue avant `main()`.
 
+> **⚠ Révisé au Jalon 0 — le chargement dynamique n'est pas disponible.** La
+> décision initiale reposait sur `GGML_BACKEND_DL`. Vérification faite,
+> `whisper-rs-sys` 0.15 (dépendance de `whisper-rs` 0.16) **ne l'expose pas** :
+> son `build.rs` sélectionne les backends par `cfg!(feature = …)` et les lie
+> statiquement. Un artefact ne peut donc pas découvrir un backend à l'exécution.
+> Le repli prévu par l'[Annexe D](#annexe-d--points-à-valider-en-implémentation)
+> — un artefact par backend — est appliqué ci-dessous.
+
 **Décision.**
 
-| Plateforme | Backend principal | Repli |
+| Plateforme | Artefact par défaut | Artefact accéléré |
 |---|---|---|
-| macOS (Apple Silicon) | **Metal** (compilé en dur, toujours présent) | CPU |
+| macOS (Apple Silicon) | **Metal** (toujours présent sur la cible) | — |
 | macOS (Intel) | CPU (AVX2) | — |
-| Windows x86_64 | **Vulkan**, chargé dynamiquement | CPU (AVX2) |
-| Linux x86_64 | **Vulkan**, chargé dynamiquement | CPU (AVX2) |
+| Windows x86_64 | CPU (AVX2) | `scripta-vulkan` |
+| Linux x86_64 | CPU (AVX2) | `scripta-vulkan` |
 
 - **Vulkan plutôt que CUDA** : un seul backend couvre NVIDIA, AMD et Intel. CUDA n'apporte un gain significatif que sur les gros modèles et impose une matrice de build (toolkit CUDA + MSVC sur Windows) notoirement fragile, pour ne couvrir qu'un seul fabricant.
-- **Chargement dynamique des backends ggml** (`GGML_BACKEND_DL`) : le binaire démarre toujours, énumère les backends disponibles à l'exécution et sélectionne le meilleur. C'est ce qui rend la détection annoncée par la GUI réellement possible avec un seul artefact de distribution.
-- Une build CUDA optionnelle (`--features cuda`) reste possible pour les utilisateurs compilant depuis les sources ; **elle n'est pas distribuée**.
+- **Sélection par feature Cargo** : `vulkan`, `cuda`, `metal` dans `crates/core`. L'absence de feature donne une build CPU, qui démarre partout.
+- Une build CUDA (`--features cuda`) reste possible depuis les sources ; **elle n'est pas distribuée**.
+- `Backend::compiled()` rapporte le backend de la compilation. **La GUI affiche donc ce avec quoi le binaire a été construit, pas le matériel découvert** — la maquette du [§4.2](#42-interface-de-bureau-tauri-v2) est à lire dans ce sens.
 
-**Conséquence.** Un seul artefact par plateforme. La commande `scripta doctor` expose les backends détectés.
+**Conséquences.**
 
-**Risque.** Le chargement dynamique de backends ggml doit être validé dès le [Jalon 0](ROADMAP.md#jalon-0--dérisquage) avec la version de `whisper-rs` retenue. Si le support s'avère insuffisant, le repli est de distribuer deux artefacts par plateforme (`scripta` / `scripta-gpu`), au prix d'une CI plus lourde.
+- **Deux artefacts par plateforme** sous Windows et Linux, un seul sous macOS. Le [Jalon 4](ROADMAP.md#jalon-4--packaging-et-cicd) s'alourdit d'autant (estimation révisée : +2 j).
+- Le téléchargement doit orienter l'utilisateur vers le bon artefact ; `scripta doctor` indique le backend compilé et signale qu'une variante accélérée existe.
+- À réexaminer lorsque `whisper-rs-sys` exposera `GGML_BACKEND_DL` : la décision initiale redeviendrait alors applicable et supprimerait un artefact.
 
 #### ADR-002 — Pipeline audio sans shell
 
@@ -288,7 +299,12 @@ La même règle s'applique à la lecture de `stdout` : elle doit se faire dans u
 
 **Sélection automatique (`--model auto`, défaut).** Le modèle est choisi d'après les backends détectés : `turbo` si un backend GPU est disponible, `base` sinon. L'utilisateur garde évidemment la main.
 
-**Téléchargement à la demande.** Source : dépôt HuggingFace `ggml-org/whisper.cpp` (anciennement `ggerganov/whisper.cpp`).
+**Téléchargement à la demande.** Source : dépôt HuggingFace **`ggerganov/whisper.cpp`**.
+
+> **Corrigé au Jalon 1.** La v2.0 indiquait `ggml-org/whisper.cpp`. Vérification
+> faite, cette adresse renvoie **HTTP 401** en accès anonyme, tandis que
+> `ggerganov/whisper.cpp` sert les modèles sans authentification. L'erreur aurait
+> bloqué la tâche 2.3 dès sa première exécution.
 
 - **Référencement par révision épinglée**, jamais par `main` : une URL de branche n'est pas reproductible et invaliderait les empreintes.
 - Vérification d'intégrité **SHA-256** obligatoire contre une table embarquée dans le binaire. Un fichier dont l'empreinte diffère est supprimé et l'opération échoue (code 30).
@@ -654,18 +670,35 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 
 ## Annexe C — Journal des corrections
 
+**v2.1** — Retours du Jalon 0 : [ADR-001](#adr-001--stratégie-daccélération-matérielle) révisé (le chargement dynamique des backends ggml n'est pas exposé par `whisper-rs-sys` 0.15 ; passage à un artefact par backend), [Annexe D](#annexe-d--points-à-valider-en-implémentation) mise à jour avec l'état réel de chaque hypothèse, [Annexe E](#annexe-e--prérequis-de-compilation) ajoutée (prérequis de compilation), MSRV portée à 1.88.
+
 **v2.0** — Révision complète. 12 corrections (Annexe A) et 15 ajouts (Annexe B). Introduction de quatre ADR pour figer les décisions structurantes. Nom du binaire unifié en `scripta`.
 
 **v1.0** — Cahier des charges initial.
 
 ## Annexe D — Points à valider en implémentation
 
-Ces points reposent sur des hypothèses à confirmer dès le [Jalon 0](ROADMAP.md#jalon-0--dérisquage) ; chacun dispose d'un repli identifié.
+État au terme du [Jalon 0](ROADMAP.md#jalon-0--dérisquage), sur `whisper-rs` 0.16 / `whisper-rs-sys` 0.15.
 
-| Hypothèse | Repli si invalidée |
-|---|---|
-| `whisper-rs` expose `abort_callback` | Contribuer le binding en amont, ou vendorer le crate |
-| `whisper-rs` supporte le chargement dynamique des backends ggml | Deux artefacts par plateforme (`scripta` / `scripta-gpu`) |
-| Le VAD Silero est accessible depuis `whisper-rs` | VAD en amont via un crate Rust dédié, appliqué au `Vec<f32>` |
-| Vulkan atteint les seuils du [§5.2](#52-performance) | Réintroduire une build CUDA distribuée pour Windows/Linux |
-| Une build FFmpeg minimale ≤ 15 Mo est atteignable | Accepter 60–70 Mo, ou étudier un décodage Opus natif en Rust (v2 — le support Opus de `symphonia` est à vérifier, un binding `libopus` reste l'option sûre) |
+| Hypothèse | État | Constat |
+|---|---|---|
+| `whisper-rs` expose `abort_callback` | ✅ **Confirmée** | `set_abort_callback_safe`, ainsi que `set_progress_callback_safe` et `set_segment_callback_safe` |
+| Chargement dynamique des backends ggml | ❌ **Invalidée** | Non exposé : sélection par feature Cargo, liaison statique. Repli appliqué — voir [ADR-001](#adr-001--stratégie-daccélération-matérielle) |
+| VAD Silero accessible depuis `whisper-rs` | ✅ **Confirmée** | Module `whisper_vad` complet : `enable_vad`, `set_vad_model_path`, `set_vad_params`, `WhisperVadContext` |
+| Vulkan atteint les seuils du [§5.2](#52-performance) | ⏳ Ouverte | La feature `vulkan` existe ; performance à mesurer au [Jalon 2](ROADMAP.md#jalon-2--robustesse-cli) |
+| Build FFmpeg minimale ≤ 15 Mo | ⏳ Ouverte | Non abordée avant le [Jalon 4](ROADMAP.md#jalon-4--packaging-et-cicd) |
+
+## Annexe E — Prérequis de compilation
+
+> **Ajout v2.1.** Découverts au Jalon 0. `whisper-rs-sys` compile whisper.cpp
+> depuis les sources et génère ses liaisons FFI à la construction : ces outils
+> sont requis pour **bâtir** Scripta, jamais pour l'exécuter.
+
+| Outil | Rôle | Obtention |
+|---|---|---|
+| **CMake** ≥ 3.20 | Build natif de whisper.cpp | `winget install Kitware.CMake` · `apt install cmake` · `brew install cmake` |
+| **libclang** (LLVM) | `bindgen`, génération des liaisons FFI | `winget install LLVM.LLVM` · `apt install libclang-dev` · fourni par Xcode |
+| **Rust** ≥ 1.88 | MSRV imposée par `whisper-rs-sys` 0.15 | `rustup` |
+| Toolchain C++ | MSVC 2022 · GCC/Clang · Xcode CLT | — |
+
+**`WHISPER_DONT_GENERATE_BINDINGS`** court-circuite `bindgen` au profit des liaisons pré-générées du crate, ce qui lève la dépendance à libclang. **Ce repli ne fonctionne que sous Linux** : les liaisons embarquées décrivent des types glibc (`_IO_FILE`, `_G_fpos_t`) dont les assertions de taille échouent sous MSVC. Il n'est donc pas utilisable comme solution multiplateforme.

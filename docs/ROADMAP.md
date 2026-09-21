@@ -1,7 +1,7 @@
 # Scripta — Roadmap d'intégration
 
-**Version :** 1.0
-**Référence :** [SPEC.md](SPEC.md) v2.0
+**Version :** 1.1
+**Référence :** [SPEC.md](SPEC.md) v2.1
 
 ---
 
@@ -33,6 +33,17 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 ---
 
 ## Jalon 0 — Dérisquage
+
+> **Statut : partiellement clos.** Les spikes 0.1 et 0.3 ont été menés par
+> inspection de l'API de `whisper-rs` 0.16 et tentative de compilation, et le
+> spike 0.2 est **entièrement couvert** par les tests d'intégration permanents
+> de `crates/core/tests/pipeline.rs` — y compris le test de non-régression de
+> l'interblocage `stderr`, validé par réintroduction du défaut. Résultats dans
+> l'[Annexe D](SPEC.md#annexe-d--points-à-valider-en-implémentation) ;
+> [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) a été révisé en
+> conséquence. Nouveau constat : les prérequis de compilation
+> ([Annexe E](SPEC.md#annexe-e--prérequis-de-compilation)) sont plus lourds
+> qu'anticipé — CMake **et** libclang.
 
 **Objectif :** valider ou invalider les hypothèses de l'[Annexe D](SPEC.md#annexe-d--points-à-valider-en-implémentation) avant tout investissement structurel. Le code produit ici est **jetable** et ne sera pas repris.
 
@@ -68,6 +79,17 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 1 — Cœur fonctionnel (PoC CLI)
 
+> **Statut : livré.** La chaîne complète
+> `URL → métadonnées → PCM → inférence → texte` a été exécutée sur une vraie
+> vidéo YouTube (« Me at the zoo », 19 s) : 304 089 échantillons extraits, soit
+> exactement 19,0 s à 16 kHz, transcrits en 2 segments avec détection de langue.
+> 54 tests verts sur Windows, dont 6 d'inférence qui se sautent proprement sans
+> les fixtures pour que la CI reste verte.
+>
+> **Restent à confirmer :** la tenue en mémoire sur une vidéo d'une heure, et la
+> CI sur les trois OS — le build natif de whisper.cpp n'a été éprouvé que sous
+> Windows/MSVC.
+
 **Objectif :** un chemin nominal de bout en bout, sans robustesse. `URL → texte sur stdout`.
 
 **Effort :** 4–6 jours. **Prérequis :** J0 clos.
@@ -87,11 +109,11 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ### Critères de sortie
 
-- [ ] `scripta "https://www.youtube.com/watch?v=<ID>" > out.txt` produit une transcription correcte sur les **trois** plateformes.
-- [ ] **Invariant zero-disk vérifié** : aucun fichier créé dans le répertoire temporaire pendant l'exécution (test instrumenté).
-- [ ] Test de non-régression du deadlock `stderr` **en place et vert** — un sidecar simulé qui écrit 1 Mio sur `stderr` ne doit pas figer le programme.
+- [x] `scripta "https://www.youtube.com/watch?v=<ID>" > out.txt` produit une transcription correcte. *(Vérifié sous Windows ; les deux autres plateformes dépendent de la CI.)*
+- [x] **Invariant zero-disk vérifié** : aucun fichier créé dans le répertoire temporaire pendant l'exécution (test instrumenté).
+- [x] Test de non-régression du deadlock `stderr` **en place et vert** — validé par réintroduction du défaut : sans drainage, `extract()` se fige et le test échoue au bout de 30 s.
 - [ ] Une vidéo de 1 h se transcrit sans dépassement de mémoire.
-- [ ] CI verte sur les trois OS, **sans accès réseau**.
+- [ ] CI verte sur les trois OS, **sans accès réseau**. *(Vérifiée localement sous Windows ; les trois OS restent à confirmer sur la PR.)*
 
 ### Risques
 

@@ -1,0 +1,16 @@
+[package]
+name = "scripta-cli"
+description = "Interface en ligne de commande de Scripta."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "scripta"
+path = "src/main.rs"
+
+[dependencies]
+scripta-core.workspace = true
+clap.workspace = true
