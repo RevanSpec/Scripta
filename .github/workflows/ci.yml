@@ -7,7 +7,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
 
 jobs:
   # SPEC §5.5 : aucun test de la CI de PR ne touche le réseau. YouTube est
@@ -23,12 +22,38 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+
+      # SPEC Annexe E : whisper-rs-sys compile whisper.cpp depuis les sources et
+      # génère ses liaisons FFI par bindgen. CMake et libclang sont requis pour
+      # BÂTIR le projet, jamais pour l'exécuter. Les runners Windows et macOS les
+      # fournissent déjà ; seul Linux demande une installation.
+      - name: Prérequis natifs (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
+
+      # bindgen ne trouve pas toujours libclang seul sous Windows.
+      - name: LIBCLANG_PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = "C:\Program Files\LLVM\bin"
+          if (Test-Path "$p\libclang.dll") {
+            "LIBCLANG_PATH=$p" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            Write-Host "libclang : $p"
+          } else {
+            Write-Host "libclang non trouvé à l'emplacement attendu ; bindgen tentera sa propre détection."
+          }
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+
       - name: Format
         run: cargo fmt --all -- --check
+      # -D warnings est passé à clippy plutôt que via RUSTFLAGS : en variable
+      # d'environnement il s'appliquerait aussi aux dépendances, et les liaisons
+      # générées de whisper-rs-sys feraient alors échouer la CI.
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
