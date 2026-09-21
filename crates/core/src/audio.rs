@@ -57,11 +57,14 @@ impl PcmDecoder {
             }
         }
 
-        let mut it = rest.chunks_exact(2);
-        for pair in &mut it {
-            out.push(to_f32(i16::from_le_bytes([pair[0], pair[1]])));
+        // `as_chunks::<2>()` plutôt que `chunks_exact(2)` : la taille est
+        // connue à la compilation, ce qui donne des tableaux `[u8; 2]`
+        // directement consommables par `from_le_bytes`, sans indexation.
+        let (pairs, remainder) = rest.as_chunks::<2>();
+        for pair in pairs {
+            out.push(to_f32(i16::from_le_bytes(*pair)));
         }
-        if let [orphan] = it.remainder() {
+        if let [orphan] = remainder {
             self.carry = Some(*orphan);
         }
     }
