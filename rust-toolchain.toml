@@ -1,0 +1,10 @@
+# Version épinglée : la CI et les postes de travail utilisent exactement le même
+# compilateur et le même jeu de lints. Sans cela, un lint introduit par une
+# version plus récente n'apparaît qu'en CI — c'est ce qui a fait échouer les
+# trois jobs sur `chunks_exact_to_as_chunks`, absent du 1.94 local.
+#
+# Relever cette version est un acte délibéré : le faire dans un commit dédié,
+# pour que les corrections de lints ne se mélangent pas à du travail fonctionnel.
+[toolchain]
+channel = "1.98"
+components = ["rustfmt", "clippy"]

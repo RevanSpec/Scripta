@@ -44,9 +44,10 @@ jobs:
             Write-Host "libclang non trouvé à l'emplacement attendu ; bindgen tentera sa propre détection."
           }
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # La version vient de rust-toolchain.toml, jamais d'ici : un `@stable`
+      # ferait diverger la CI du poste de travail à chaque publication de Rust.
+      - name: Toolchain
+        run: rustup show
       - uses: Swatinem/rust-cache@v2
 
       - name: Format
