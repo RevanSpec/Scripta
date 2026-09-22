@@ -17,10 +17,35 @@ use scripta_core::{Access, ScriptaError};
 /// sûr un sidecar dont le `stderr` ne serait pas drainé.
 const STDERR_SATURANT: usize = 1024 * 1024;
 
+/// Répertoire temporaire des fixtures.
+///
+/// Le répertoire temporaire **système**, et non un sous-dossier de `target/` :
+/// le chemin du dépôt est déjà long, les noms de fixtures encodent un message
+/// en hexadécimal, et l'ensemble dépassait `MAX_PATH` sous Windows.
+fn fixtures() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("scripta-")
+        .tempdir()
+        .expect("répertoire de fixtures")
+}
+
+/// Installe une copie du sidecar simulé sous un nom porteur de configuration.
+///
+/// **Lien physique et non copie.** Copier un exécutable puis l'exécuter
+/// aussitôt expose à `ETXTBSY` sous Linux : `execve` refuse un fichier qu'un
+/// autre thread tient ouvert en écriture, et les tests s'exécutent en
+/// parallèle dans un même processus. Un lien physique ne crée qu'un nom
+/// supplémentaire pour un inode que personne n'écrit — la course disparaît.
+///
+/// La copie reste en repli si les liens échouent, par exemple lorsque le
+/// répertoire temporaire est monté sur un autre système de fichiers.
 fn sidecar(dir: &Path, nom: &str) -> PathBuf {
     let src = env!("CARGO_BIN_EXE_scripta-fake-sidecar");
     let dst = dir.join(format!("{nom}{}", std::env::consts::EXE_SUFFIX));
-    std::fs::copy(src, &dst).expect("copie du sidecar simulé");
+
+    if std::fs::hard_link(src, &dst).is_err() {
+        std::fs::copy(src, &dst).expect("copie du sidecar simulé");
+    }
     dst
 }
 
@@ -55,7 +80,7 @@ fn extract_avec_limite(sidecars: Sidecars, limite: Duration) -> Result<Vec<f32>,
 
 #[test]
 fn pipeline_nominal_produit_les_echantillons_attendus() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixtures();
     // 64 000 octets s16le = 32 000 échantillons = 2 s à 16 kHz.
     let sc = Sidecars::new(
         sidecar(dir.path(), "ytdlp-so4096"),
@@ -78,7 +103,7 @@ fn pipeline_nominal_produit_les_echantillons_attendus() {
 /// définitivement.
 #[test]
 fn stderr_saturant_ne_provoque_pas_d_interblocage() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixtures();
     let sc = Sidecars::new(
         sidecar(dir.path(), &format!("ytdlp-so4096-se{STDERR_SATURANT}")),
         sidecar(dir.path(), &format!("ffmpeg-so64000-se{STDERR_SATURANT}")),
@@ -90,7 +115,7 @@ fn stderr_saturant_ne_provoque_pas_d_interblocage() {
 
 #[test]
 fn echec_ytdlp_classe_la_verification_anti_robot() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixtures();
     let msg = hex("ERROR: Sign in to confirm you're not a bot");
     let sc = Sidecars::new(
         sidecar(dir.path(), &format!("ytdlp-x1-msg{msg}")),
@@ -105,7 +130,7 @@ fn echec_ytdlp_classe_la_verification_anti_robot() {
 
 #[test]
 fn echec_ytdlp_classe_l_indisponibilite() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixtures();
     let msg = hex("ERROR: Private video. Sign in if you've been granted access");
     let sc = Sidecars::new(
         sidecar(dir.path(), &format!("ytdlp-x1-msg{msg}")),
@@ -122,7 +147,7 @@ fn echec_ytdlp_classe_l_indisponibilite() {
 /// `stderr` brut, jamais en classification erronée.
 #[test]
 fn echec_ytdlp_non_reconnu_expose_le_stderr_brut() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixtures();
     let msg = hex("ERROR: un message totalement inedit de yt-dlp");
     let sc = Sidecars::new(
         sidecar(dir.path(), &format!("ytdlp-x1-msg{msg}")),
@@ -142,7 +167,7 @@ fn echec_ytdlp_non_reconnu_expose_le_stderr_brut() {
 
 #[test]
 fn sidecar_absent_est_signale_explicitement() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixtures();
     let sc = Sidecars::new(
         dir.path().join("binaire-qui-n-existe-pas"),
         sidecar(dir.path(), "ffmpeg-so0"),
@@ -156,7 +181,7 @@ fn sidecar_absent_est_signale_explicitement() {
 
 #[test]
 fn flux_audio_vide_est_une_erreur() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixtures();
     let sc = Sidecars::new(
         sidecar(dir.path(), "ytdlp-so4096"),
         sidecar(dir.path(), "ffmpeg-so0"),
@@ -170,7 +195,7 @@ fn flux_audio_vide_est_une_erreur() {
 
 #[test]
 fn echec_ffmpeg_est_remonte() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixtures();
     let msg = hex("Invalid data found when processing input");
     let sc = Sidecars::new(
         sidecar(dir.path(), "ytdlp-so4096"),
@@ -189,7 +214,7 @@ fn echec_ffmpeg_est_remonte() {
 /// fichier intermédiaire.
 #[test]
 fn aucun_fichier_temporaire_n_est_cree() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixtures();
     let travail = tempfile::tempdir().unwrap();
     let sc = Sidecars::new(
         sidecar(dir.path(), "ytdlp-so8192"),
@@ -216,7 +241,7 @@ fn aucun_fichier_temporaire_n_est_cree() {
 /// résidente du processus est un instrument trop grossier.
 #[test]
 fn le_tampon_audio_n_est_pas_realloue() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = fixtures();
 
     // 1,0 s annoncée ; le flux en livre 1,002 — même écart relatif que celui
     // mesuré en conditions réelles (3 664 s décodées pour 3 657 annoncées).
