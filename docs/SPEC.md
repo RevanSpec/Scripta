@@ -183,7 +183,20 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
 
 **Conséquences.**
 
-- Empreinte mémoire audio : **≈ 230 Mo par heure** (16 000 échantillons/s × 4 octets). Une garde `--max-duration` (défaut 240 min) protège contre les vidéos pathologiques.
+- **Empreinte mémoire : ≈ 350 Mo par heure d'audio, plus ~300 Mo fixes.** Mesuré sur une vidéo de 61 min avec le modèle `base` : **986 Mo**.
+
+  | Poste | Échelle |
+  |---|---|
+  | PCM `f32` | 223 Mo/h (16 000 × 4 octets) |
+  | Spectrogramme mel | 112 Mo/h (80 bandes × 100 trames/s × 4 octets) |
+  | Modèle | 75 Mo à 1,1 Go selon la variante |
+  | État whisper | ≈ 160 Mo, indépendant de la durée |
+
+  > **Corrigé au Jalon 2.** La v2.0 annonçait 230 Mo/h en ne comptant que le
+  > PCM. Le spectrogramme mel, calculé intégralement en amont par whisper.cpp,
+  > ajoute la moitié de ce volume et avait été omis.
+
+- Une garde `--max-duration` (défaut 240 min) protège contre les vidéos pathologiques. À 4 h, l'empreinte approcherait 1,7 Go.
 - L'affichage progressif de la GUI est alimenté par le **callback de nouveaux segments** de whisper.cpp, pas par un découpage. whisper.cpp traite l'audio séquentiellement par fenêtres de 30 s et émet ses segments au fil de l'eau : le rendu est donc bien progressif, simplement il démarre une fois le téléchargement achevé.
 
 #### ADR-004 — Emplacement des sidecars mis à jour
@@ -580,8 +593,8 @@ OPTIONS DE `run` :
 
 | Métrique | Seuil |
 |---|---|
-| Empreinte RSS, 1 h d'audio, modèle `small` | < 1,2 Go |
-| Empreinte audio brute | ≈ 230 Mo / h ([ADR-003](#adr-003--inférence-non-streamée)) |
+| Empreinte RSS, 1 h d'audio, modèle `base` | < 1,1 Go (mesuré : 986 Mo) |
+| Empreinte totale | ≈ 350 Mo / h + ~300 Mo fixes ([ADR-003](#adr-003--inférence-non-streamée)) |
 | Démarrage CLI (`--version`, `--help`) | < 150 ms |
 | Sonde de métadonnées (SF-01) | < 3 s en conditions nominales |
 | Écritures disque hors sortie et caches | **0 octet** (invariant « zero-disk ») |
