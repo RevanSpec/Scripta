@@ -17,8 +17,8 @@ use clap::{Parser, Subcommand};
 use scripta_core::audio::{self, Sidecars};
 use scripta_core::format::{OutputFormat, SubtitleOptions};
 use scripta_core::{
-    CancelToken, Document, Engine, ModelSpec, Run, ScriptaError, Source, models, probe, transcribe,
-    url,
+    CancelToken, Document, Engine, ModelSpec, Run, ScriptaError, Source, models, probe, subtitles,
+    transcribe, url,
 };
 
 #[derive(Parser)]
@@ -49,6 +49,12 @@ enum Command {
         url: String,
         // Boxé : `RunArgs` pèse ~288 octets et `Doctor` est vide ; sans
         // indirection, chaque variante de l'énuméré porterait ce poids.
+        #[command(flatten)]
+        args: Box<RunArgs>,
+    },
+    /// Récupère uniquement les sous-titres YouTube officiels.
+    Subs {
+        url: String,
         #[command(flatten)]
         args: Box<RunArgs>,
     },
@@ -108,6 +114,22 @@ struct RunArgs {
     #[arg(long)]
     vad_model: Option<PathBuf>,
 
+    /// Utilise les sous-titres YouTube officiels s'ils existent.
+    ///
+    /// Instantané, mais les pistes auto-générées sont dépourvues de
+    /// ponctuation dans de nombreuses langues et restent en deçà de Whisper.
+    /// En cas d'échec, repli silencieux sur la transcription.
+    #[arg(long)]
+    prefer_subs: bool,
+
+    /// Lit les cookies du navigateur indiqué (firefox, chrome, edge…).
+    ///
+    /// Nécessaire pour les vidéos soumises à limite d'âge ou à vérification
+    /// anti-robot. Les cookies ne servent qu'à youtube.com, ne sont jamais
+    /// écrits sur disque ni journalisés.
+    #[arg(long, value_name = "NAVIGATEUR")]
+    cookies_from_browser: Option<String>,
+
     /// Langue forcée (fr, en, es…). Détection automatique par défaut.
     #[arg(short, long)]
     lang: Option<String>,
@@ -159,6 +181,7 @@ fn main() -> ExitCode {
     let result = match (cli.command, cli.url) {
         (Some(Command::Doctor), _) => doctor(),
         (Some(Command::Models { action }), _) => models_cmd(&action),
+        (Some(Command::Subs { url, args }), _) => subs(&url, &args),
         (Some(Command::Run { url, args }), _) => run(&url, &args),
         (None, Some(url)) => run(&url, &cli.run),
         (None, None) => {
@@ -236,6 +259,131 @@ fn parse_format(s: &str) -> Result<OutputFormat, String> {
     s.parse()
 }
 
+fn access_of(args: &RunArgs) -> scripta_core::Access {
+    scripta_core::Access {
+        cookies_from_browser: args.cookies_from_browser.clone(),
+    }
+}
+
+fn sous_titres_options(args: &RunArgs) -> SubtitleOptions {
+    SubtitleOptions {
+        max_line_width: args.max_line_width,
+        max_line_count: args.max_line_count,
+        ..Default::default()
+    }
+}
+
+fn charger_moteur(args: &RunArgs, progress: &impl Fn(&str)) -> scripta_core::Result<Engine> {
+    let model_path = resolve_model(args, args.quiet)?;
+    progress(&format!("Chargement du modèle ({})…", model_path.display()));
+    let engine = Engine::load(&model_path)?;
+    transcribe::check_translate_supported(engine.model_id(), args.translate)?;
+    Ok(engine)
+}
+
+fn document_de(
+    url: &scripta_core::CanonicalUrl,
+    meta: &probe::Metadata,
+    transcript: scripta_core::Transcript,
+    run: Run,
+) -> Document {
+    Document {
+        source: Source {
+            url: url.as_str(),
+            video_id: url.video_id().to_string(),
+            title: meta.title.clone(),
+            channel: meta.channel.clone(),
+            duration_s: meta.duration,
+            upload_date: meta.upload_date.clone(),
+        },
+        run: Run {
+            language: transcript.language.clone(),
+            ..run
+        },
+        transcript,
+    }
+}
+
+/// Tente la récupération des sous-titres officiels — SPEC SF-01.
+///
+/// Retourne `None` plutôt qu'une erreur en cas d'absence ou d'échec : la
+/// spécification impose un **repli silencieux** sur la transcription. Les
+/// endpoints de sous-titres de YouTube sont fréquemment limités en débit, et
+/// un `--prefer-subs` ne doit jamais faire échouer une commande qui aurait
+/// abouti sans lui.
+fn recuperer_sous_titres(
+    meta: &probe::Metadata,
+    args: &RunArgs,
+) -> Option<scripta_core::Transcript> {
+    let piste = subtitles::best_track(meta, args.lang.as_deref())?;
+
+    if !args.quiet {
+        eprintln!(
+            "Sous-titres {} trouvés ({}).",
+            if piste.auto {
+                "auto-générés"
+            } else {
+                "officiels"
+            },
+            piste.lang
+        );
+        if piste.auto {
+            eprintln!(
+                "  Attention : une piste auto-générée est souvent sans ponctuation\n\
+                   et en deçà de Whisper. Retirez --prefer-subs pour transcrire."
+            );
+        }
+        if subtitles::is_translation(&piste, meta) {
+            eprintln!(
+                "  Attention : traduction automatique, non la transcription d'origine\n\
+                   ({} d'après YouTube). Deux passages machine se cumulent.",
+                meta.language.as_deref().unwrap_or("?")
+            );
+        }
+    }
+
+    match subtitles::fetch(&piste) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            if !args.quiet {
+                eprintln!("  Échec : {e}");
+            }
+            None
+        }
+    }
+}
+
+/// Sous-commande `subs` : sous-titres officiels **uniquement**.
+///
+/// À la différence de `--prefer-subs`, leur absence est ici une erreur : c'est
+/// exactement ce que l'utilisateur a demandé, et un repli silencieux sur
+/// trente minutes d'inférence serait une surprise désagréable.
+fn subs(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
+    let url = url::parse(raw_url)?;
+    let access = access_of(args);
+
+    let meta = probe::probe(&args.ytdlp_path, &url, &access)?;
+    probe::check_admissible(&meta, args.max_duration)?;
+
+    let piste = subtitles::best_track(&meta, args.lang.as_deref()).ok_or_else(|| {
+        let dispo = meta.available_subtitle_langs().join(", ");
+        ScriptaError::ExtractionFailed {
+            detail: match (args.lang.as_deref(), dispo.is_empty()) {
+                (_, true) => "cette vidéo n'a aucun sous-titre".to_string(),
+                (Some(l), false) => format!("aucun sous-titre en « {l} » (disponibles : {dispo})"),
+                (None, false) => format!("aucune piste exploitable (langues : {dispo})"),
+            },
+        }
+    })?;
+
+    let transcript = subtitles::fetch(&piste)?;
+    let doc = document_de(&url, &meta, transcript, Run::default());
+    write_output(
+        args.output.as_deref(),
+        &args.format.render(&doc, &sous_titres_options(args)),
+    )
+}
+
 fn run(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
     let url = url::parse(raw_url)?;
     if url.had_playlist() && !args.quiet {
@@ -248,16 +396,20 @@ fn run(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
         }
     };
 
-    // Le modèle est résolu et chargé avant tout travail réseau : un modèle
-    // absent doit échouer immédiatement, pas après plusieurs minutes de
-    // téléchargement.
-    let model_path = resolve_model(args, args.quiet)?;
-    progress(&format!("Chargement du modèle ({})…", model_path.display()));
-    let engine = Engine::load(&model_path)?;
-    transcribe::check_translate_supported(engine.model_id(), args.translate)?;
+    let access = access_of(args);
+
+    // Ordre dicté par `--prefer-subs`. Sans lui, le modèle est résolu en
+    // premier pour qu'un modèle absent échoue immédiatement plutôt qu'après
+    // plusieurs minutes de téléchargement. Avec lui, il se peut qu'aucun modèle
+    // ne soit nécessaire : il serait absurde d'en télécharger un pour rien.
+    let engine = if args.prefer_subs {
+        None
+    } else {
+        Some(charger_moteur(args, &progress)?)
+    };
 
     progress("Sonde des métadonnées…");
-    let meta = probe::probe(&args.ytdlp_path, &url)?;
+    let meta = probe::probe(&args.ytdlp_path, &url, &access)?;
     probe::check_admissible(&meta, args.max_duration)?;
 
     if !args.quiet {
@@ -268,11 +420,30 @@ fn run(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
         eprintln!("« {} » — {duree}", meta.title);
     }
 
+    if args.prefer_subs {
+        match recuperer_sous_titres(&meta, args) {
+            Some(transcript) => {
+                let doc = document_de(&url, &meta, transcript, Run::default());
+                return write_output(
+                    args.output.as_deref(),
+                    &args.format.render(&doc, &sous_titres_options(args)),
+                );
+            }
+            None => progress("Pas de sous-titres exploitables : repli sur la transcription."),
+        }
+    }
+
+    let engine = match engine {
+        Some(e) => e,
+        None => charger_moteur(args, &progress)?,
+    };
+
     progress("Extraction audio…");
     let samples = audio::extract(
         &Sidecars::new(&args.ytdlp_path, &args.ffmpeg_path),
         &url,
         meta.duration,
+        &access,
     )?;
     progress(&format!(
         "{} échantillons extraits ({:.1} s à {} Hz).",

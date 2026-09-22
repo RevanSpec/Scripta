@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use scripta_core::ScriptaError;
 use scripta_core::audio::{self, Sidecars};
 use scripta_core::url;
+use scripta_core::{Access, ScriptaError};
 
 /// Au-delà de la taille d'un tampon de pipe (≈64 Kio) : de quoi bloquer à coup
 /// sûr un sidecar dont le `stderr` ne serait pas drainé.
@@ -37,7 +37,12 @@ fn url_test() -> scripta_core::CanonicalUrl {
 fn extract_avec_limite(sidecars: Sidecars, limite: Duration) -> Result<Vec<f32>, ScriptaError> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(audio::extract(&sidecars, &url_test(), Some(2.0)));
+        let _ = tx.send(audio::extract(
+            &sidecars,
+            &url_test(),
+            Some(2.0),
+            &Access::default(),
+        ));
     });
     match rx.recv_timeout(limite) {
         Ok(res) => res,
@@ -57,7 +62,8 @@ fn pipeline_nominal_produit_les_echantillons_attendus() {
         sidecar(dir.path(), "ffmpeg-so64000"),
     );
 
-    let samples = audio::extract(&sc, &url_test(), Some(2.0)).expect("extraction");
+    let samples =
+        audio::extract(&sc, &url_test(), Some(2.0), &Access::default()).expect("extraction");
 
     assert_eq!(samples.len(), 32_000);
     // Motif déterministe du sidecar : compteur 16 bits little-endian.
@@ -91,7 +97,7 @@ fn echec_ytdlp_classe_la_verification_anti_robot() {
         sidecar(dir.path(), "ffmpeg-so0"),
     );
 
-    match audio::extract(&sc, &url_test(), None) {
+    match audio::extract(&sc, &url_test(), None, &Access::default()) {
         Err(e @ ScriptaError::AuthRequired { .. }) => assert_eq!(e.exit_code(), 12),
         other => panic!("attendu AuthRequired, obtenu {other:?}"),
     }
@@ -106,7 +112,7 @@ fn echec_ytdlp_classe_l_indisponibilite() {
         sidecar(dir.path(), "ffmpeg-so0"),
     );
 
-    match audio::extract(&sc, &url_test(), None) {
+    match audio::extract(&sc, &url_test(), None, &Access::default()) {
         Err(e @ ScriptaError::Unavailable { .. }) => assert_eq!(e.exit_code(), 11),
         other => panic!("attendu Unavailable, obtenu {other:?}"),
     }
@@ -123,7 +129,7 @@ fn echec_ytdlp_non_reconnu_expose_le_stderr_brut() {
         sidecar(dir.path(), "ffmpeg-so0"),
     );
 
-    match audio::extract(&sc, &url_test(), None) {
+    match audio::extract(&sc, &url_test(), None, &Access::default()) {
         Err(ScriptaError::ExtractionFailed { detail }) => {
             assert!(
                 detail.contains("totalement inedit"),
@@ -142,7 +148,7 @@ fn sidecar_absent_est_signale_explicitement() {
         sidecar(dir.path(), "ffmpeg-so0"),
     );
 
-    match audio::extract(&sc, &url_test(), None) {
+    match audio::extract(&sc, &url_test(), None, &Access::default()) {
         Err(e @ ScriptaError::SidecarMissing { .. }) => assert_eq!(e.exit_code(), 21),
         other => panic!("attendu SidecarMissing, obtenu {other:?}"),
     }
@@ -157,7 +163,7 @@ fn flux_audio_vide_est_une_erreur() {
     );
 
     assert!(matches!(
-        audio::extract(&sc, &url_test(), None),
+        audio::extract(&sc, &url_test(), None, &Access::default()),
         Err(ScriptaError::ExtractionFailed { .. })
     ));
 }
@@ -171,7 +177,7 @@ fn echec_ffmpeg_est_remonte() {
         sidecar(dir.path(), &format!("ffmpeg-x1-msg{msg}")),
     );
 
-    match audio::extract(&sc, &url_test(), None) {
+    match audio::extract(&sc, &url_test(), None, &Access::default()) {
         Err(ScriptaError::ExtractionFailed { detail }) => {
             assert!(detail.contains("Invalid data"), "diagnostic : {detail}");
         }
@@ -191,7 +197,7 @@ fn aucun_fichier_temporaire_n_est_cree() {
     );
 
     let avant = std::fs::read_dir(travail.path()).unwrap().count();
-    audio::extract(&sc, &url_test(), Some(2.0)).expect("extraction");
+    audio::extract(&sc, &url_test(), Some(2.0), &Access::default()).expect("extraction");
     let apres = std::fs::read_dir(travail.path()).unwrap().count();
 
     assert_eq!(
@@ -221,7 +227,8 @@ fn le_tampon_audio_n_est_pas_realloue() {
         sidecar(dir.path(), &format!("ffmpeg-so{octets}")),
     );
 
-    let samples = audio::extract(&sc, &url_test(), Some(duree_annoncee)).expect("extraction");
+    let samples = audio::extract(&sc, &url_test(), Some(duree_annoncee), &Access::default())
+        .expect("extraction");
 
     assert_eq!(samples.len(), 16_032, "flux tronqué");
     assert!(

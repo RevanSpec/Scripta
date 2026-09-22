@@ -132,7 +132,8 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > **Statut : en cours.** Livrées — 2.1 (taxonomie), 2.2 (recevabilité), 2.3
 > (téléchargement des modèles), 2.4 (`--model auto`), 2.5 (formateurs
 > `srt`/`vtt`/`json`), 2.6 (VAD, `--initial-prompt`, horodatage au mot, garde
-> `turbo`), 2.7 (progression), 2.8 (`SIGINT`). Restent 2.9 à 2.16.
+> `turbo`), 2.7 (progression), 2.8 (`SIGINT`), 2.11 (sous-titres officiels),
+> 2.12 (cookies). Restent 2.9, 2.10, 2.13 à 2.16.
 
 **Objectif :** une CLI **publiable**. C'est le jalon le plus dense et le plus créateur de valeur.
 
@@ -152,8 +153,8 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 | ~~**2.8**~~ | ~~Interruption~~ ✅ premier `Ctrl-C` arme le jeton d'annulation, second force la sortie en 130 | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
 | **2.9** | `core::sidecar` — résolution à deux emplacements, détection de version, **installation hors bundle** | [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) |
 | **2.10** | `core::cache` — cache de transcriptions, clé, éviction LRU | [SF-08](SPEC.md#sf-08--cache-de-transcriptions) |
-| **2.11** | Sous-titres officiels (`--prefer-subs`, sous-commande `subs`), repli silencieux sur échec | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées) |
-| **2.12** | `--cookies-from-browser` + avertissements de confidentialité | [SF-09](SPEC.md#sf-09--authentification-et-confidentialité) |
+| ~~**2.11**~~ | ~~Sous-titres officiels~~ ✅ `--prefer-subs` avec repli silencieux, sous-commande `subs` où l'absence est une erreur, analyseur WebVTT déduplicant le défilement | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées) |
+| ~~**2.12**~~ | ~~`--cookies-from-browser`~~ ✅ transmis à la sonde et à l'extraction, désactivé par défaut | [SF-09](SPEC.md#sf-09--authentification-et-confidentialité) |
 | **2.13** | Arborescence CLI complète : `run`/`subs`/`models`/`cache`/`update-extractor`/`doctor`, `run` implicite | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
 | **2.14** | **Suite de tests complète** : golden files, sidecars simulés, couverture de toutes les variantes d'erreur, intégration `tiny` + assertion WER | [§5.5](SPEC.md#55-stratégie-de-test) |
 | **2.15** | **Banc de performance** → mesure réelle et **ajustement des seuils du [§5.2](SPEC.md#52-performance)** | [§5.2](SPEC.md#52-performance) |

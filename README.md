@@ -28,7 +28,7 @@ n'est pas encore empaqueté ni distribué.
 | Interruption propre (`Ctrl-C`) | ✅ |
 | Téléchargement des modèles, vérifié SHA-256 | ✅ |
 | Accélération GPU | ⏳ compilable, non distribuée |
-| Sous-titres YouTube officiels | ⏳ |
+| Sous-titres YouTube officiels | ✅ |
 | Application de bureau | ⏳ |
 | Binaires précompilés | ⏳ |
 
@@ -181,7 +181,27 @@ scripta -m small -l fr --initial-prompt "Kubernetes, Prometheus, Grafana" "<URL>
 
 # Traduction vers l'anglais (pas avec turbo)
 scripta -m large-v3 --translate "<URL>"
+
+# Sous-titres officiels : instantané, aucune inférence
+scripta subs -l fr -f srt -o cours.srt "<URL>"
+
+# Vidéo restreinte (limite d'âge, vérification anti-robot)
+scripta --cookies-from-browser firefox "<URL>"
 ```
+
+### Sous-titres officiels
+
+`scripta subs` récupère les sous-titres de YouTube sans lancer Whisper — une
+heure de vidéo en quelques secondes. `--prefer-subs` les tente d'abord et se
+replie silencieusement sur la transcription en cas d'absence ou d'échec.
+
+La langue retenue est celle demandée, à défaut celle déclarée par YouTube.
+**Sans l'une ni l'autre, et face à plusieurs pistes, Scripta refuse de
+deviner** : YouTube publie des traductions automatiques dans une centaine de
+langues, et choisir la première reviendrait à tirer au sort.
+
+Deux avertissements sont émis le cas échéant : piste auto-générée (souvent sans
+ponctuation) et traduction automatique (deux passages machine cumulés).
 
 ### Options principales
 

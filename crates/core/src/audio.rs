@@ -106,8 +106,9 @@ pub fn extract(
     sidecars: &Sidecars,
     url: &CanonicalUrl,
     expected_duration_s: Option<f64>,
+    access: &crate::probe::Access,
 ) -> Result<Vec<f32>> {
-    let mut dl = spawn_downloader(&sidecars.ytdlp, url)?;
+    let mut dl = spawn_downloader(&sidecars.ytdlp, url, access)?;
 
     // Le stdout de yt-dlp devient le stdin de ffmpeg : câblage direct par
     // descripteur, sans processus shell intermédiaire (ADR-002).
@@ -181,7 +182,11 @@ pub fn extract(
     Ok(samples)
 }
 
-fn spawn_downloader(ytdlp: &Path, url: &CanonicalUrl) -> Result<Child> {
+fn spawn_downloader(
+    ytdlp: &Path,
+    url: &CanonicalUrl,
+    access: &crate::probe::Access,
+) -> Result<Child> {
     Command::new(ytdlp)
         .args([
             "-q",
@@ -191,10 +196,11 @@ fn spawn_downloader(ytdlp: &Path, url: &CanonicalUrl) -> Result<Child> {
             "bestaudio[ext=webm]/bestaudio/best",
             "-o",
             "-",
-            // `--` clôt les options : aucun argument suivant ne peut être
-            // réinterprété comme un drapeau.
-            "--",
         ])
+        .args(access.args())
+        // `--` clôt les options : aucun argument suivant ne peut être
+        // réinterprété comme un drapeau.
+        .arg("--")
         .arg(url.as_str())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
