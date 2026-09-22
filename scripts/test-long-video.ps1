@@ -115,12 +115,16 @@ if ($env:OS -eq "Windows_NT") {
 }
 
 $Exe = Join-Path $Root "target\$Profile\scripta.exe"
-if (-not (Test-Path $Exe)) {
-    Write-Host "  Compilation en $Profile (plusieurs minutes, whisper.cpp est bati depuis ses sources)..."
-    if ($Profile -eq "release") { cargo build --release --workspace } else { cargo build --workspace }
-    if ($LASTEXITCODE -ne 0) { throw "La compilation a échoué." }
-}
+
+# Toujours invoquer cargo, jamais se contenter de la présence du binaire : après
+# un `git pull`, un exécutable déjà là est périmé, et la mesure porterait sur
+# l'ancien code. Cargo est incrémental — sans changement, l'appel est immédiat.
+Write-Host "  Compilation en $Profile (immédiate si rien n'a changé)..."
+if ($Profile -eq "release") { cargo build --release --workspace } else { cargo build --workspace }
+if ($LASTEXITCODE -ne 0) { throw "La compilation a échoué." }
+
 Write-Host "  $Exe"
+Write-Host ("  Compilé le {0:yyyy-MM-dd HH:mm:ss}" -f (Get-Item $Exe).LastWriteTime)
 if ($Profile -eq "debug") {
     Write-Host "  (profil debug : les mesures de debit ne sont pas comparables au SPEC 5.2)" -ForegroundColor Yellow
 }
