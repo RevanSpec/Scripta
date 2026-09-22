@@ -126,6 +126,11 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 2 — Robustesse CLI
 
+> **Statut : en cours.** Livrées — 2.1 (taxonomie), 2.2 (recevabilité), 2.5
+> (formateurs `srt`/`vtt`/`json`), 2.6 (VAD, `--initial-prompt`, horodatage au
+> mot, garde `turbo`), 2.7 (progression), 2.8 (`SIGINT`). Restent 2.3
+> (téléchargement des modèles), 2.4, 2.9 à 2.16.
+
 **Objectif :** une CLI **publiable**. C'est le jalon le plus dense et le plus créateur de valeur.
 
 **Effort :** 8–12 jours. **Prérequis :** J1 clos.
@@ -138,10 +143,10 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 | **2.2** | Gardes de recevabilité : `is_live`, `--max-duration`, limite d'âge, playlists | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées), [SF-07](SPEC.md#sf-07--taxonomie-derreurs-et-codes-de-sortie) |
 | **2.3** | `core::models` — téléchargement, **SHA-256**, fichier `.part` + renommage atomique, reprise, timeouts, progression | [SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper) |
 | **2.4** | Détection des backends + `--model auto` + `--backend` | [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle), [SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper) |
-| **2.5** | `core::format::{srt,vtt,json}` — contraintes de lisibilité, échappement, schéma JSON versionné | [SF-05](SPEC.md#sf-05--formats-dexportation) |
+| ~~**2.5**~~ | ~~`core::format::{srt,vtt,json}`~~ ✅ contraintes de lisibilité, échappement XML pour WebVTT, schéma JSON versionné | [SF-05](SPEC.md#sf-05--formats-dexportation) |
 | **2.6** | VAD Silero (par défaut), `--initial-prompt`, `--word-timestamps`, **garde `turbo` + `--translate`** | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale) |
 | **2.7** | Progression : `progress_callback` + `new_segment_callback` → `indicatif` sur **`stderr`**, désactivée hors TTY | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale), [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
-| **2.8** | Interruption : `SIGINT`/`Ctrl-Break` → `abort_callback` + destruction des sidecars + nettoyage des fichiers partiels → code 130 | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
+| ~~**2.8**~~ | ~~Interruption~~ ✅ premier `Ctrl-C` arme le jeton d'annulation, second force la sortie en 130 | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
 | **2.9** | `core::sidecar` — résolution à deux emplacements, détection de version, **installation hors bundle** | [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) |
 | **2.10** | `core::cache` — cache de transcriptions, clé, éviction LRU | [SF-08](SPEC.md#sf-08--cache-de-transcriptions) |
 | **2.11** | Sous-titres officiels (`--prefer-subs`, sous-commande `subs`), repli silencieux sur échec | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées) |

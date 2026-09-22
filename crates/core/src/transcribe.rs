@@ -15,7 +15,7 @@ use whisper_rs::{
 
 use crate::audio::SAMPLE_RATE;
 use crate::error::{Result, ScriptaError};
-use crate::transcript::{Segment, Transcript};
+use crate::transcript::{Segment, Transcript, Word};
 
 /// Backend d'accélération effectivement compilé dans ce binaire.
 ///
@@ -313,7 +313,7 @@ impl Engine {
             detail: format!("inférence : {e}"),
         })?;
 
-        Ok(build_transcript(&state, options))
+        Ok(build_transcript(&self.ctx, &state, options))
     }
 }
 
@@ -341,7 +341,67 @@ pub fn check_translate_supported(model_id: &str, translate: bool) -> Result<()> 
     Ok(())
 }
 
-fn build_transcript(state: &whisper_rs::WhisperState, options: &Options) -> Transcript {
+/// Reconstruit les mots à partir des tokens du segment.
+///
+/// Whisper ne produit pas des mots mais des tokens BPE : « bonjour » peut
+/// arriver en « bon » + « jour ». La convention du modèle est qu'un token
+/// **initial de mot commence par une espace** ; c'est elle qui sert de
+/// frontière. Les bornes du mot sont celles de son premier et de son dernier
+/// token, et sa probabilité la moyenne des leurs.
+fn build_words(ctx: &WhisperContext, segment: &whisper_rs::WhisperSegment<'_>) -> Vec<Word> {
+    let eot = ctx.token_eot();
+    let mut mots: Vec<Word> = Vec::new();
+    let mut probas: Vec<Vec<f32>> = Vec::new();
+
+    for i in 0..segment.n_tokens() {
+        let Some(token) = segment.get_token(i) else {
+            continue;
+        };
+        // Au-delà de EOT se trouvent les tokens de service (horodatage, langue,
+        // marqueurs de tâche) : ils n'ont pas de texte à restituer.
+        if token.token_id() >= eot {
+            continue;
+        }
+        let Ok(texte) = token.to_str_lossy() else {
+            continue;
+        };
+        if texte.trim().is_empty() {
+            continue;
+        }
+
+        let data = token.token_data();
+        let debut = data.t0 as f64 / 100.0;
+        let fin = data.t1 as f64 / 100.0;
+        let nouveau_mot = texte.starts_with(' ') || mots.is_empty();
+
+        if nouveau_mot {
+            mots.push(Word {
+                word: texte.trim_start().to_string(),
+                start: debut,
+                end: fin,
+                probability: None,
+            });
+            probas.push(vec![token.token_probability()]);
+        } else if let (Some(mot), Some(p)) = (mots.last_mut(), probas.last_mut()) {
+            mot.word.push_str(&texte);
+            mot.end = fin;
+            p.push(token.token_probability());
+        }
+    }
+
+    for (mot, p) in mots.iter_mut().zip(&probas) {
+        if !p.is_empty() {
+            mot.probability = Some(p.iter().sum::<f32>() / p.len() as f32);
+        }
+    }
+    mots
+}
+
+fn build_transcript(
+    ctx: &WhisperContext,
+    state: &whisper_rs::WhisperState,
+    options: &Options,
+) -> Transcript {
     let n = state.full_n_segments();
     let mut segments = Vec::with_capacity(n.max(0) as usize);
 
@@ -364,7 +424,11 @@ fn build_transcript(state: &whisper_rs::WhisperState, options: &Options) -> Tran
             text,
             no_speech_prob: Some(seg.no_speech_probability()),
             avg_logprob: None,
-            words: Vec::new(),
+            words: if options.word_timestamps {
+                build_words(ctx, &seg)
+            } else {
+                Vec::new()
+            },
         });
     }
 
