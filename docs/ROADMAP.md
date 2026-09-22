@@ -86,9 +86,12 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > 54 tests verts sur Windows, dont 6 d'inférence qui se sautent proprement sans
 > les fixtures pour que la CI reste verte.
 >
-> **Restent à confirmer :** la tenue en mémoire sur une vidéo d'une heure, et la
-> CI sur les trois OS — le build natif de whisper.cpp n'a été éprouvé que sous
-> Windows/MSVC.
+> **Tenue en mémoire confirmée** sur une vidéo de 61 min : 1 039 Mo, code 0,
+> couverture 100,2 %, langue française correctement détectée sur 1 467
+> segments. La mesure a révélé un doublement du tampon audio, depuis corrigé.
+>
+> **Reste à confirmer :** la CI sur les trois OS — le build natif de
+> whisper.cpp n'a été éprouvé que sous Windows/MSVC.
 
 **Objectif :** un chemin nominal de bout en bout, sans robustesse. `URL → texte sur stdout`.
 
@@ -112,7 +115,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 - [x] `scripta "https://www.youtube.com/watch?v=<ID>" > out.txt` produit une transcription correcte. *(Vérifié sous Windows ; les deux autres plateformes dépendent de la CI.)*
 - [x] **Invariant zero-disk vérifié** : aucun fichier créé dans le répertoire temporaire pendant l'exécution (test instrumenté).
 - [x] Test de non-régression du deadlock `stderr` **en place et vert** — validé par réintroduction du défaut : sans drainage, `extract()` se fige et le test échoue au bout de 30 s.
-- [ ] Une vidéo de 1 h se transcrit sans dépassement de mémoire.
+- [x] Une vidéo de 1 h se transcrit sans dépassement de mémoire. *(Mesuré le 2026-09-22 : 61 min, 1 039 Mo, code 0, couverture 100,2 %. Le défaut de doublement du tampon révélé par cette mesure est corrigé ; l'attendu retombe à ≈ 820 Mo.)*
 - [ ] CI verte sur les trois OS, **sans accès réseau**. *(Vérifiée localement sous Windows ; les trois OS restent à confirmer sur la PR.)*
 
 ### Risques

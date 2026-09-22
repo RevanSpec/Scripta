@@ -154,10 +154,16 @@ $pcmMo = $dureeAudio * 16000 * 4 / 1MB
 
 Write-Host ("  {0}" -f $meta.title)
 Write-Host ("  Durée            : {0:N0} s = {1:N1} min" -f $dureeAudio, ($dureeAudio / 60))
-Write-Host ("  PCM f32 attendu  : {0:N1} Mo" -f $pcmMo)
-$overheadMo = 160   # état de whisper.cpp, mesuré, indépendant de la durée
-$cretePrevueMo = $pcmMo + ((Get-Item $ModelPath).Length / 1MB) + $overheadMo
-Write-Host ("  Crête prévue     : {0:N0} Mo (PCM + modèle + état)" -f $cretePrevueMo)
+# Trois postes échelonnés par la durée, un fixe. Constantes issues d'une
+# mesure réelle sur 61 min : 1 039 Mo, décomposés en 446 (PCM doublé) + 112
+# (mel) + 141 (modèle) + 340 (état). Une seule mesure, sur une seule machine :
+# la part « état » reste la plus incertaine.
+$melMo = 80 * $dureeAudio * 100 * 4 / 1MB   # 80 bandes x 100 trames/s x 4 octets
+$overheadMo = 340                            # état whisper.cpp, mesuré
+$cretePrevueMo = $pcmMo + $melMo + ((Get-Item $ModelPath).Length / 1MB) + $overheadMo
+Write-Host ("  PCM f32          : {0:N0} Mo" -f $pcmMo)
+Write-Host ("  Spectrogramme mel: {0:N0} Mo" -f $melMo)
+Write-Host ("  Crête prévue     : {0:N0} Mo (PCM + mel + modèle + état)" -f $cretePrevueMo)
 
 # ---------------------------------------------------------------- exécution --
 Section "Transcription"

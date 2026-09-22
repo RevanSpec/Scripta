@@ -584,10 +584,22 @@ OPTIONS DE `run` :
 
 | Configuration | Modèle | Seuil |
 |---|---|---|
-| CPU x86_64, 8 cœurs, AVX2 | `base` | ≥ 3 × temps réel |
-| CPU x86_64, 8 cœurs, AVX2 | `small` | ≥ 1,5 × temps réel |
+| CPU x86_64, 12 cœurs, AVX2 | `base` | ≥ 2 × temps réel |
 | Apple Silicon M1+, Metal | `turbo` | ≥ 8 × temps réel |
 | GPU discret ≥ 6 Go VRAM, Vulkan | `turbo` | ≥ 8 × temps réel |
+
+> **Révisé au Jalon 2 — les seuils initiaux étaient trop optimistes.** La v2.0
+> annonçait « ≥ 3 × avec `base` sur 8 cœurs ». Mesure sur 61 min de parole
+> française, build `--release` avec le contournement R9, 12 cœurs logiques :
+> **2,1 × temps réel**. Le seuil est ramené à 2 ×.
+>
+> L'extrapolation initiale venait d'un extrait de 19 s, où `tiny` atteignait
+> 11,5 × — non représentatif à double titre : modèle plus léger, et durée trop
+> courte pour que les replis en température pèsent. Sur du contenu réel, ces
+> replis dominent : whisper.cpp relance jusqu'à `best_of` décodeurs dès qu'un
+> segment échoue aux seuils de qualité.
+>
+> Les seuils GPU restent **non mesurés** : aucune machine de test disponible.
 
 **Autres seuils :**
 

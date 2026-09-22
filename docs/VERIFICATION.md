@@ -159,10 +159,9 @@ La commande ne doit rien renvoyer.
 
 ## 6. Vidéo longue — mémoire et débit
 
-**Dernier critère de sortie du Jalon 1 encore ouvert.** L'attendu est
-d'environ **230 Mo par heure** d'audio
-([ADR-003](SPEC.md#adr-003--inférence-non-streamée)), auxquels s'ajoute la
-taille du modèle.
+Attendu : **≈ 350 Mo par heure** d'audio — 223 de PCM et 112 de spectrogramme
+mel — auxquels s'ajoutent le modèle et ~340 Mo d'état
+([ADR-003](SPEC.md#adr-003--inférence-non-streamée)).
 
 ### Vidéo de référence
 
@@ -175,12 +174,41 @@ rend mesurable l'apport de `--initial-prompt`.
 
 | Grandeur | Valeur |
 |---|---|
-| Durée | 3 657 s |
-| PCM `f32` en mémoire | **223,2 Mo** (3657 × 16000 × 4) |
-| Crête attendue, modèle `base` | ≈ 400 Mo (PCM + modèle + état) |
+| Durée annoncée | 3 657 s |
+| PCM `f32` | 223 Mo (3657 × 16000 × 4) |
+| Spectrogramme mel | 112 Mo (80 × 365 700 × 4) |
+| Crête attendue, modèle `base` | ≈ 820 Mo |
 
-Le calcul recoupe l'estimation de 230 Mo/h de l'ADR-003 : c'est précisément
-cette prédiction que la mesure doit confirmer ou démentir.
+### Mesure de référence — 2026-09-22
+
+Windows 11, 12 cœurs logiques, CPU seul, modèle `base`, build `--release` avec
+le contournement R9.
+
+| Grandeur | Mesuré |
+|---|---|
+| Code de sortie | `0` |
+| Durée totale | 1 786 s (29,8 min) |
+| Vitesse | **2,1 × temps réel** |
+| Crête mémoire | **1 039 Mo** |
+| Langue détectée | `fr` |
+| Segments | 1 467 |
+| Couverture | **100,2 %** (3 664 s décodées pour 3 657 s annoncées) |
+| Répétitions | 5 × `[Musique]`, 4 × `C'est ça.` — sur 1 467 segments |
+
+**Trois enseignements.**
+
+1. **Le flux décodé dépasse la durée annoncée de 0,19 %** (3 664 s contre
+   3 657). La couverture supérieure à 100 % n'est pas une anomalie : c'est
+   yt-dlp qui arrondit. C'est aussi la cause du doublement du tampon audio,
+   corrigé depuis par une marge de 2 % à la pré-allocation.
+
+2. **Les 1 039 Mo se décomposent** en 446 (PCM doublé par le défaut ci-dessus)
+   + 112 (mel) + 141 (modèle) + 340 (état whisper). Sans le doublement,
+   l'attendu descend à **≈ 820 Mo**.
+
+3. **Les répétitions ne sont pas des hallucinations.** `[Musique]` est un
+   étiquetage correct des passages musicaux, `C'est ça.` une locution réelle.
+   0,6 % des segments : le VAD n'est pas le levier que ce contenu réclame.
 
 ```powershell
 $U = "https://www.youtube.com/watch?v=cZwuhte5ZBI"
@@ -211,7 +239,7 @@ $d = Get-Content out.json -Raw | ConvertFrom-Json
 
 | Point | Attendu |
 |---|---|
-| Mémoire crête | ≈ 230 Mo/h d'audio + taille du modèle. Une croissance très supérieure signale une fuite. |
+| Mémoire crête | ≈ 350 Mo/h + modèle + ~340 Mo d'état. Une croissance très supérieure signale une fuite. |
 | Code de sortie | `0` |
 | Segments | Couvrent toute la durée, sans trou ni répétition en boucle |
 | Vitesse | À comparer aux seuils du [§5.2](SPEC.md#52-performance) — **build `--release` avec le contournement R9 uniquement** |
