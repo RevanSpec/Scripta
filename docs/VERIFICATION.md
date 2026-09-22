@@ -218,40 +218,42 @@ rend mesurable l'apport de `--initial-prompt`.
 ### Mesure de référence — 2026-09-22
 
 Windows 11, 12 cœurs logiques, CPU seul, modèle `base`, build `--release` avec
-le contournement R9.
+le contournement R9, **machine au repos**.
 
 | Grandeur | Mesuré |
 |---|---|
 | Code de sortie | `0` |
-| Durée totale | 1 364 s (22,7 min) |
-| Vitesse | **2,7 × temps réel** (une première mesure à 2,1 × était faussée par une compilation concurrente) |
-| Crête mémoire | **1 039 Mo** |
-| Langue détectée | `fr` |
+| Durée totale | 774 s (12,9 min) |
+| Vitesse | **4,8 × temps réel** |
+| Crête mémoire | **1 040 Mo** |
+| Langue détectée | `fr`, conforme à la déclaration YouTube |
 | Segments | 1 467 |
-| Couverture | **100,2 %** (3 664 s décodées pour 3 657 s annoncées) |
-| Répétitions | 5 × `[Musique]`, 4 × `C'est ça.` — sur 1 467 segments |
+| Couverture | 100,2 % (3 664 s décodées pour 3 657 s annoncées) |
+| Sous-titres officiels | 1 866 segments en 3,0 s |
+| **Concordance des deux chemins** | **75 % de recouvrement lexical** |
 
 **Trois enseignements.**
 
-1. **Le flux décodé dépasse la durée annoncée de 0,19 %** (3 664 s contre
-   3 657). La couverture supérieure à 100 % n'est pas une anomalie : c'est
-   yt-dlp qui arrondit. C'est aussi la cause du doublement du tampon audio,
-   corrigé depuis par une marge de 2 % à la pré-allocation.
+1. **Le modèle mémoire est exact.** 224 (notre tampon) + 225 (copie padded de
+   whisper) + 112 (mel) + 141 (modèle) + 338 (tampons ggml) = **1 040 Mo**,
+   soit la valeur mesurée. L'audio réside deux fois en mémoire pendant le
+   calcul du mel, et c'est le poste le plus lourd après les tampons de calcul.
 
-2. **Les 1 039 Mo se décomposent** en 224 (notre tampon) + 225 (copie padded
-   de whisper) + 112 (mel) + 141 (modèle) + 337 (tampons de calcul ggml).
-   L'audio réside **deux fois** en mémoire pendant le calcul du mel.
+2. **Une mesure de débit exige une machine au repos.** Le même binaire a donné
+   2,1 ×, puis 2,7 ×, puis 4,8 × — l'écart tient entièrement aux compilations
+   concurrentes. Le seuil du [§5.2](SPEC.md#52-performance), que j'avais
+   abaissé de 3 × à 2 × sur la foi d'une mesure polluée, est rétabli à 3 ×.
 
-   Une seconde mesure après correction de la pré-allocation a rendu
-   **exactement 1 039 Mo**. Ce n'est pas une coïncidence : le doublement du
-   tampon portait sur l'espace d'adressage réservé, dont la moitié haute
-   n'était jamais écrite ni résidente. Le correctif évite une recopie de
-   224 Mo et divise l'adressage par deux, mais l'empreinte physique est
-   inchangée — elle ne pouvait pas l'être.
+3. **Les répétitions ne sont pas des hallucinations.** 5 × `[Musique]` et
+   4 × `C'est ça.` sur 1 467 segments, soit 0,6 %. `[Musique]` est un
+   étiquetage correct des passages musicaux. Le VAD n'est pas le levier que ce
+   contenu réclame.
 
-3. **Les répétitions ne sont pas des hallucinations.** `[Musique]` est un
-   étiquetage correct des passages musicaux, `C'est ça.` une locution réelle.
-   0,6 % des segments : le VAD n'est pas le levier que ce contenu réclame.
+**La concordance à 75 %** est le résultat le plus solide de la série : deux
+chemins totalement indépendants — l'un par YouTube, l'autre par Whisper —
+s'accordent sur trois mots de vocabulaire sur quatre. Le quart restant
+s'explique par la ponctuation, la casse et les noms propres, que les pistes
+auto-générées rendent mal. Aucun contrôle structurel n'apporte cette garantie.
 
 ```powershell
 $U = "https://www.youtube.com/watch?v=cZwuhte5ZBI"

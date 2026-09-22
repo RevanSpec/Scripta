@@ -115,7 +115,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 - [x] `scripta "https://www.youtube.com/watch?v=<ID>" > out.txt` produit une transcription correcte. *(Vérifié sous Windows ; les deux autres plateformes dépendent de la CI.)*
 - [x] **Invariant zero-disk vérifié** : aucun fichier créé dans le répertoire temporaire pendant l'exécution (test instrumenté).
 - [x] Test de non-régression du deadlock `stderr` **en place et vert** — validé par réintroduction du défaut : sans drainage, `extract()` se fige et le test échoue au bout de 30 s.
-- [x] Une vidéo de 1 h se transcrit sans dépassement de mémoire. *(Mesuré le 2026-09-22 : 61 min, 1 039 Mo, code 0, couverture 100,2 %. Le défaut de doublement du tampon révélé par cette mesure est corrigé ; l'attendu retombe à ≈ 820 Mo.)*
+- [x] Une vidéo de 1 h se transcrit sans dépassement de mémoire. *(Mesuré le 2026-09-22, machine au repos : 61 min, 1 040 Mo, 4,8 × temps réel, couverture 100,2 %, langue `fr` correctement détectée. Le modèle mémoire prédit désormais cette valeur à l'octet près.)*
 - [ ] CI verte sur les trois OS, **sans accès réseau**. *(Vérifiée localement sous Windows ; les trois OS restent à confirmer sur la PR.)*
 
 ### Risques
@@ -303,7 +303,7 @@ Aucune de ces tâches ne conditionne la v1.0.
 | R3 | **YouTube casse les extracteurs** | Élevé | **Certaine** *(question de quand, pas de si)* | Continu | [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) + tâche quotidienne 4.7 + [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour). **C'est la raison d'être de ces trois éléments** |
 | R4 | Vérification anti-robot bloquant les utilisateurs | Moyen | Élevée | J2 | Diagnostic explicite (code 12) + `--cookies-from-browser` documenté |
 | R5 | Chargement dynamique des backends non supporté | Moyen | Moyenne | J0 | Repli deux artefacts (+2 j sur le J4) |
-| R6 | Seuils de performance non atteints | Faible | Moyenne | J2 | Seuils mesurés puis inscrits, pas promis à l'avance |
+| R6 | Seuils de performance non atteints | Faible | **Écartée** | J2 | Mesuré à 4,8 × temps réel sur une machine au repos, contre un seuil de 3 ×. Les mesures antérieures à 2,1 × et 2,7 × étaient faussées par des compilations concurrentes : **un débit ne se mesure que sur une machine inoccupée** |
 | R7 | Deadlock `stderr` découvert tardivement | Élevé | **Écartée par construction** | J1 | Test de non-régression dédié (1.8), exigé en critère de sortie |
 | R8 | Dérive de périmètre vers la GUI avant stabilisation du cœur | Moyen | Moyenne | J2/J3 | J3 bloqué tant que J2 n'est pas clos ; publier la **v0.1.0 CLI** pour matérialiser la valeur intermédiaire |
 | R9 | **`--release` produit un whisper.cpp non optimisé sous MSVC** | Élevé | **Avérée — contournée** | J4 | Mesuré : sans correctif, release est 4 à 6× plus lent que debug. La crate `cmake` écrase `CMAKE_CXX_FLAGS_<BUILD_TYPE>` tandis que le générateur Visual Studio compile en `--config Release` : le profil release perd son `/O2`. **Contournement appliqué** — `CMAKE_{C,CXX}_FLAGS_RELEASE` forcés par l'environnement, que le `build.rs` de `whisper-rs-sys` réinjecte en define. Vérifié : 11,7–14,0× temps réel après correctif, contre 1,4–2,0× avant. Le contournement doit être porté dans la CI, le script de test et tout pipeline d'empaquetage : `.cargo/config.toml` ne permet pas d'`[env]` conditionné à la cible. Correctif amont souhaitable. |

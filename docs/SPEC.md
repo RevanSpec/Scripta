@@ -607,20 +607,22 @@ OPTIONS DE `run` :
 
 | Configuration | Modèle | Seuil |
 |---|---|---|
-| CPU x86_64, 12 cœurs, AVX2 | `base` | ≥ 2 × temps réel |
+| CPU x86_64, 12 cœurs, AVX2 | `base` | ≥ 3 × temps réel |
 | Apple Silicon M1+, Metal | `turbo` | ≥ 8 × temps réel |
 | GPU discret ≥ 6 Go VRAM, Vulkan | `turbo` | ≥ 8 × temps réel |
 
-> **Révisé au Jalon 2 — les seuils initiaux étaient trop optimistes.** La v2.0
-> annonçait « ≥ 3 × avec `base` sur 8 cœurs ». Mesure sur 61 min de parole
-> française, build `--release` avec le contournement R9, 12 cœurs logiques :
-> **2,1 × temps réel**. Le seuil est ramené à 2 ×.
+> **Mesuré au Jalon 2.** Sur 61 min de parole française, modèle `base`, build
+> `--release` avec le contournement R9, 12 cœurs logiques, **machine au
+> repos** : **4,8 × temps réel**.
 >
-> L'extrapolation initiale venait d'un extrait de 19 s, où `tiny` atteignait
-> 11,5 × — non représentatif à double titre : modèle plus léger, et durée trop
-> courte pour que les replis en température pèsent. Sur du contenu réel, ces
-> replis dominent : whisper.cpp relance jusqu'à `best_of` décodeurs dès qu'un
-> segment échoue aux seuils de qualité.
+> Le même code avait d'abord donné 2,1 × puis 2,7 ×. Les deux mesures étaient
+> faussées par des compilations concurrentes sur la même machine. J'avais
+> abaissé le seuil de 3 × à 2 × sur cette base : il est rétabli à 3 ×, la
+> valeur d'origine, qui était correcte.
+>
+> **Leçon de méthode :** une mesure de débit n'a de sens que sur une machine
+> au repos. Les trois mesures du même binaire s'échelonnent de 2,1 × à 4,8 ×
+> selon la charge concurrente.
 >
 > Les seuils GPU restent **non mesurés** : aucune machine de test disponible.
 
