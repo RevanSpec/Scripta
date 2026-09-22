@@ -17,8 +17,8 @@ use clap::{Parser, Subcommand};
 use scripta_core::audio::{self, Sidecars};
 use scripta_core::format::{OutputFormat, SubtitleOptions};
 use scripta_core::{
-    CancelToken, Document, Engine, ModelSpec, Run, ScriptaError, Source, models, probe, subtitles,
-    transcribe, url,
+    CancelToken, Document, Engine, ModelSpec, Run, ScriptaError, Source, cache, models, probe,
+    subtitles, transcribe, url,
 };
 
 #[derive(Parser)]
@@ -63,6 +63,11 @@ enum Command {
         #[command(subcommand)]
         action: ModelsAction,
     },
+    /// Gère le cache de transcriptions.
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
     /// Diagnostic : sidecars, backends, modèles, chemins.
     Doctor,
 }
@@ -79,6 +84,16 @@ enum ModelsAction {
     Path,
     /// Recalcule l'empreinte d'un modèle installé.
     Verify { model: String },
+}
+
+#[derive(Subcommand)]
+enum CacheAction {
+    /// Liste les transcriptions en cache.
+    List,
+    /// Vide le cache.
+    Clear,
+    /// Affiche le répertoire de cache.
+    Path,
 }
 
 #[derive(clap::Args, Clone)]
@@ -170,6 +185,10 @@ struct RunArgs {
     #[arg(long, default_value = "ffmpeg")]
     ffmpeg_path: PathBuf,
 
+    /// Ignore le cache de transcriptions, en lecture comme en écriture.
+    #[arg(long)]
+    no_cache: bool,
+
     /// Supprime les messages de progression.
     #[arg(short, long)]
     quiet: bool,
@@ -181,6 +200,7 @@ fn main() -> ExitCode {
     let result = match (cli.command, cli.url) {
         (Some(Command::Doctor), _) => doctor(),
         (Some(Command::Models { action }), _) => models_cmd(&action),
+        (Some(Command::Cache { action }), _) => cache_cmd(&action),
         (Some(Command::Subs { url, args }), _) => subs(&url, &args),
         (Some(Command::Run { url, args }), _) => run(&url, &args),
         (None, Some(url)) => run(&url, &cli.run),
@@ -271,6 +291,22 @@ fn sous_titres_options(args: &RunArgs) -> SubtitleOptions {
         max_line_count: args.max_line_count,
         ..Default::default()
     }
+}
+
+/// Identifiant du modèle **sans** le charger ni le télécharger.
+///
+/// Il entre dans la clé de cache, qu'il faut pouvoir calculer avant toute
+/// opération coûteuse : sur un succès de cache, ni le modèle ni le réseau ne
+/// sont nécessaires.
+fn model_id_of(args: &RunArgs) -> scripta_core::Result<String> {
+    let fichier = match &args.model_path {
+        Some(p) => p.clone(),
+        None => PathBuf::from(resolve_alias(&args.model)?.file),
+    };
+    Ok(fichier
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "inconnu".to_string()))
 }
 
 fn charger_moteur(args: &RunArgs, progress: &impl Fn(&str)) -> scripta_core::Result<Engine> {
@@ -398,6 +434,30 @@ fn run(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
 
     let access = access_of(args);
 
+    // La clé réunit tout ce qui influe sur le résultat. En omettre un seul
+    // élément ferait resservir une transcription obtenue dans d'autres
+    // conditions — un défaut silencieux, donc le pire (SPEC SF-08).
+    let clef = cache::Key {
+        video_id: url.video_id().to_string(),
+        model: model_id_of(args)?,
+        lang: args.lang.clone(),
+        translate: args.translate,
+        vad: args.vad_model.is_some(),
+        word_timestamps: args.word_timestamps || args.format == OutputFormat::Json,
+    };
+
+    // Consultation avant tout le reste : sur un succès, ni le modèle ni le
+    // réseau ne sont sollicités.
+    if !args.no_cache
+        && let Some(doc) = cache::get(&clef)
+    {
+        progress("Transcription trouvée en cache.");
+        return write_output(
+            args.output.as_deref(),
+            &args.format.render(&doc, &sous_titres_options(args)),
+        );
+    }
+
     // Ordre dicté par `--prefer-subs`. Sans lui, le modèle est résolu en
     // premier pour qu'un modèle absent échoue immédiatement plutôt qu'après
     // plusieurs minutes de téléchargement. Avec lui, il se peut qu'aucun modèle
@@ -523,15 +583,22 @@ fn run(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
         transcript,
     };
 
-    let sous_titres = SubtitleOptions {
-        max_line_width: args.max_line_width,
-        max_line_count: args.max_line_count,
-        ..Default::default()
-    };
+    if !args.no_cache {
+        // Un échec de mise en cache ne doit jamais faire échouer une
+        // transcription réussie : le résultat est là, seule sa réutilisation
+        // future serait perdue.
+        match cache::put(&clef, &doc) {
+            Ok(()) => {
+                let _ = cache::evict(cache::DEFAULT_MAX_BYTES);
+            }
+            Err(e) if !args.quiet => eprintln!("Avertissement : mise en cache impossible ({e})."),
+            Err(_) => {}
+        }
+    }
 
     write_output(
         args.output.as_deref(),
-        &args.format.render(&doc, &sous_titres),
+        &args.format.render(&doc, &sous_titres_options(args)),
     )
 }
 
@@ -633,6 +700,46 @@ fn models_cmd(action: &ModelsAction) -> scripta_core::Result<()> {
                     detail: format!("{} absent ou corrompu", spec.file),
                 });
             }
+        }
+    }
+    Ok(())
+}
+
+fn taille_lisible(octets: u64) -> String {
+    match octets {
+        n if n >= 1_048_576 => format!("{:.1} Mo", n as f64 / 1_048_576.0),
+        n if n >= 1024 => format!("{} Ko", n / 1024),
+        n => format!("{n} o"),
+    }
+}
+
+fn cache_cmd(action: &CacheAction) -> scripta_core::Result<()> {
+    match action {
+        CacheAction::Path => println!("{}", cache::cache_dir()?.display()),
+        CacheAction::Clear => {
+            let n = cache::clear()?;
+            eprintln!("{n} transcription(s) supprimée(s).");
+        }
+        CacheAction::List => {
+            let entrees = cache::list()?;
+            println!(
+                "Cache : {}
+",
+                cache::cache_dir()?.display()
+            );
+            if entrees.is_empty() {
+                println!("  (vide)");
+                return Ok(());
+            }
+            for e in &entrees {
+                println!("  {:>7}  {}", taille_lisible(e.bytes), e.title);
+            }
+            println!(
+                "
+  {} entrée(s), {:.1} Mo",
+                entrees.len(),
+                cache::total_bytes()? as f64 / 1_048_576.0
+            );
         }
     }
     Ok(())

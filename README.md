@@ -150,6 +150,22 @@ scripta models rm small
 scripta models path
 ```
 
+### Cache de transcriptions
+
+Une vidéo déjà transcrite ressort **instantanément** — 62 ms contre plusieurs
+minutes — et tous les formats s'en dérivent sans réinférence. La clé couvre
+tout ce qui influe sur le résultat : vidéo, modèle, langue, traduction, VAD,
+horodatage au mot. Changer l'un d'eux relance la transcription.
+
+```bash
+scripta cache list      # entrées et volume
+scripta cache clear
+scripta cache path
+scripta --no-cache "<URL>"   # ignore le cache dans les deux sens
+```
+
+Éviction LRU au-delà de 2 Go.
+
 | Modèle | Taille | Remarque |
 |---|---|---|
 | `tiny` | 75 Mo | très rapide, qualité limitée |

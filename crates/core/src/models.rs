@@ -147,23 +147,7 @@ pub fn aliases() -> Vec<&'static str> {
 /// `SCRIPTA_MODELS_DIR` prime sur tout, ce qui permet de partager un cache
 /// entre plusieurs installations ou de le placer sur un autre volume.
 pub fn models_dir() -> Result<PathBuf> {
-    if let Some(dir) = std::env::var_os("SCRIPTA_MODELS_DIR") {
-        return Ok(PathBuf::from(dir));
-    }
-
-    let base = directories::BaseDirs::new().ok_or_else(|| ScriptaError::ModelUnavailable {
-        detail: "répertoire personnel introuvable ; définissez SCRIPTA_MODELS_DIR".to_string(),
-    })?;
-
-    // Sous Windows, les données d'application vont dans LOCALAPPDATA ; ailleurs
-    // le cache XDG ou son équivalent macOS convient.
-    let racine = if cfg!(windows) {
-        base.data_local_dir().to_path_buf()
-    } else {
-        base.cache_dir().to_path_buf()
-    };
-
-    Ok(racine.join("scripta").join("models"))
+    crate::paths::sub_dir("models", "SCRIPTA_MODELS_DIR")
 }
 
 pub fn path_of(spec: &ModelSpec) -> Result<PathBuf> {

@@ -14,10 +14,12 @@
 //! sous-titres officiels, cookies.
 
 pub mod audio;
+pub mod cache;
 pub mod document;
 pub mod error;
 pub mod format;
 pub mod models;
+pub mod paths;
 pub mod probe;
 pub mod subtitles;
 pub mod transcribe;

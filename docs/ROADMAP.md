@@ -133,7 +133,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > (téléchargement des modèles), 2.4 (`--model auto`), 2.5 (formateurs
 > `srt`/`vtt`/`json`), 2.6 (VAD, `--initial-prompt`, horodatage au mot, garde
 > `turbo`), 2.7 (progression), 2.8 (`SIGINT`), 2.11 (sous-titres officiels),
-> 2.12 (cookies). Restent 2.9, 2.10, 2.13 à 2.16.
+> 2.10 (cache de transcriptions), 2.12 (cookies). Restent 2.9, 2.13 à 2.16.
 
 **Objectif :** une CLI **publiable**. C'est le jalon le plus dense et le plus créateur de valeur.
 
@@ -152,7 +152,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 | **2.7** | Progression : `progress_callback` + `new_segment_callback` → `indicatif` sur **`stderr`**, désactivée hors TTY | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale), [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
 | ~~**2.8**~~ | ~~Interruption~~ ✅ premier `Ctrl-C` arme le jeton d'annulation, second force la sortie en 130 | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
 | **2.9** | `core::sidecar` — résolution à deux emplacements, détection de version, **installation hors bundle** | [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) |
-| **2.10** | `core::cache` — cache de transcriptions, clé, éviction LRU | [SF-08](SPEC.md#sf-08--cache-de-transcriptions) |
+| ~~**2.10**~~ | ~~`core::cache`~~ ✅ clé couvrant tous les paramètres influents, écriture atomique, éviction LRU, consultation avant chargement du modèle | [SF-08](SPEC.md#sf-08--cache-de-transcriptions) |
 | ~~**2.11**~~ | ~~Sous-titres officiels~~ ✅ `--prefer-subs` avec repli silencieux, sous-commande `subs` où l'absence est une erreur, analyseur WebVTT déduplicant le défilement | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées) |
 | ~~**2.12**~~ | ~~`--cookies-from-browser`~~ ✅ transmis à la sonde et à l'extraction, désactivé par défaut | [SF-09](SPEC.md#sf-09--authentification-et-confidentialité) |
 | **2.13** | Arborescence CLI complète : `run`/`subs`/`models`/`cache`/`update-extractor`/`doctor`, `run` implicite | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
