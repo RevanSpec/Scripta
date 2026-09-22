@@ -158,7 +158,42 @@ La commande ne doit rien renvoyer.
 
 ---
 
-## 6. Vidéo longue — mémoire et débit
+## 6. Suite d'acceptation sur vidéo longue
+
+Un seul script couvre l'ensemble. Depuis la racine du dépôt :
+
+```powershell
+.\scripts	est-long-video.ps1 -Quick   # ~1 min, sans inférence
+.\scripts	est-long-video.ps1          # complet, ~25 min
+```
+
+Il vérifie les prérequis, compile, puis enchaîne deux phases.
+
+**Phase 1 — rapide.** Sous-titres officiels dans les quatre formats, avec
+contrôle de conformité de chacun (numérotation et virgule décimale du SRT,
+en-tête `WEBVTT` et point décimal, schéma JSON), couverture des horodatages,
+absence de cue de durée aberrante, et les cinq codes de sortie contractuels.
+
+**Phase 2 — transcription.** Mesure de la mémoire crête et du débit, contrôle
+de couverture, cohérence de la langue détectée avec celle déclarée par YouTube,
+détection des répétitions en boucle.
+
+**Concordance.** Les deux phases empruntent des chemins **indépendants** : l'une
+passe par YouTube, l'autre par Whisper. Le script mesure leur recouvrement
+lexical. Un score élevé rend improbable que les deux soient corrompus de la même
+manière — c'est le seul contrôle de la suite qui valide la transcription sur le
+fond plutôt que sur la forme.
+
+> **Note PowerShell 5.1.** Le script emploie délibérément
+> `ErrorActionPreference = "Continue"`. En « Stop », chaque ligne de `stderr`
+> d'un exécutable natif devient un `ErrorRecord` fatal — la ligne « Finished »
+> de `cargo` suffisait à faire avorter la suite. Les échecs réels sont
+> contrôlés par `$LASTEXITCODE`.
+
+---
+
+## 7. Mémoire et débit — détail
+
 
 Attendu : **≈ 350 Mo par heure** d'audio — 223 de PCM et 112 de spectrogramme
 mel — auxquels s'ajoutent le modèle et ~340 Mo d'état
