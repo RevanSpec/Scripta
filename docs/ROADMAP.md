@@ -129,10 +129,10 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 2 — Robustesse CLI
 
-> **Statut : en cours.** Livrées — 2.1 (taxonomie), 2.2 (recevabilité), 2.5
-> (formateurs `srt`/`vtt`/`json`), 2.6 (VAD, `--initial-prompt`, horodatage au
-> mot, garde `turbo`), 2.7 (progression), 2.8 (`SIGINT`). Restent 2.3
-> (téléchargement des modèles), 2.4, 2.9 à 2.16.
+> **Statut : en cours.** Livrées — 2.1 (taxonomie), 2.2 (recevabilité), 2.3
+> (téléchargement des modèles), 2.4 (`--model auto`), 2.5 (formateurs
+> `srt`/`vtt`/`json`), 2.6 (VAD, `--initial-prompt`, horodatage au mot, garde
+> `turbo`), 2.7 (progression), 2.8 (`SIGINT`). Restent 2.9 à 2.16.
 
 **Objectif :** une CLI **publiable**. C'est le jalon le plus dense et le plus créateur de valeur.
 
@@ -144,8 +144,8 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 |---|---|---|
 | **2.1** | `core::error` — énuméré `ScriptaError` exhaustif, mise en correspondance des motifs de `stderr` de yt-dlp, codes de sortie | [SF-07](SPEC.md#sf-07--taxonomie-derreurs-et-codes-de-sortie) |
 | **2.2** | Gardes de recevabilité : `is_live`, `--max-duration`, limite d'âge, playlists | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées), [SF-07](SPEC.md#sf-07--taxonomie-derreurs-et-codes-de-sortie) |
-| **2.3** | `core::models` — téléchargement, **SHA-256**, fichier `.part` + renommage atomique, reprise, timeouts, progression | [SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper) |
-| **2.4** | Détection des backends + `--model auto` + `--backend` | [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle), [SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper) |
+| ~~**2.3**~~ | ~~`core::models`~~ ✅ téléchargement, SHA-256, `.part` + renommage atomique, reprise par `Range`, timeouts, progression | [SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper) |
+| ~~**2.4**~~ | ~~`--model auto`~~ ✅ résout vers `turbo` si un backend GPU est compilé, `base` sinon. `--backend` sans objet : le backend est lié à la compilation ([ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) révisé) | [SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper) |
 | ~~**2.5**~~ | ~~`core::format::{srt,vtt,json}`~~ ✅ contraintes de lisibilité, échappement XML pour WebVTT, schéma JSON versionné | [SF-05](SPEC.md#sf-05--formats-dexportation) |
 | **2.6** | VAD Silero (par défaut), `--initial-prompt`, `--word-timestamps`, **garde `turbo` + `--translate`** | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale) |
 | **2.7** | Progression : `progress_callback` + `new_segment_callback` → `indicatif` sur **`stderr`**, désactivée hors TTY | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale), [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |

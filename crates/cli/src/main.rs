@@ -1,13 +1,13 @@
 //! Interface en ligne de commande de Scripta — SPEC §4.1.
 //!
-//! # État — Jalon 1
+//! # État — Jalon 2
 //!
 //! Le squelette de sous-commandes est en place (SPEC §4.1, correction de la v1
 //! qui plaçait `--update-extractor` en conflit avec un positionnel requis).
 //! `run` couvre la chaîne complète URL → transcription.
 //!
-//! Le modèle doit être mis en place manuellement (`SCRIPTA_MODELS_DIR` ou
-//! `--model-path`) : son téléchargement relève de la tâche 2.3.
+//! Le modèle est téléchargé au premier usage et vérifié par empreinte
+//! SHA-256 ; `--model-path` reste disponible pour un fichier hors catalogue.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -17,7 +17,8 @@ use clap::{Parser, Subcommand};
 use scripta_core::audio::{self, Sidecars};
 use scripta_core::format::{OutputFormat, SubtitleOptions};
 use scripta_core::{
-    CancelToken, Document, Engine, Run, ScriptaError, Source, probe, transcribe, url,
+    CancelToken, Document, Engine, ModelSpec, Run, ScriptaError, Source, models, probe, transcribe,
+    url,
 };
 
 #[derive(Parser)]
@@ -51,8 +52,27 @@ enum Command {
         #[command(flatten)]
         args: Box<RunArgs>,
     },
+    /// Gère le cache de modèles.
+    Models {
+        #[command(subcommand)]
+        action: ModelsAction,
+    },
     /// Diagnostic : sidecars, backends, modèles, chemins.
     Doctor,
+}
+
+#[derive(Subcommand)]
+enum ModelsAction {
+    /// Liste les modèles et leur état local.
+    List,
+    /// Télécharge un modèle et vérifie son empreinte.
+    Pull { model: String },
+    /// Supprime un modèle du cache.
+    Rm { model: String },
+    /// Affiche le répertoire de cache.
+    Path,
+    /// Recalcule l'empreinte d'un modèle installé.
+    Verify { model: String },
 }
 
 #[derive(clap::Args, Clone)]
@@ -74,8 +94,10 @@ struct RunArgs {
     )]
     format: OutputFormat,
 
-    /// Nom du modèle, résolu dans SCRIPTA_MODELS_DIR en `ggml-<nom>.bin`.
-    #[arg(short, long, default_value = "base")]
+    /// Modèle : auto, tiny, base, small, medium, large-v3, turbo.
+    ///
+    /// Téléchargé à la demande et vérifié par empreinte SHA-256.
+    #[arg(short, long, default_value = "auto")]
     model: String,
 
     /// Chemin explicite du modèle, prioritaire sur --model.
@@ -136,6 +158,7 @@ fn main() -> ExitCode {
 
     let result = match (cli.command, cli.url) {
         (Some(Command::Doctor), _) => doctor(),
+        (Some(Command::Models { action }), _) => models_cmd(&action),
         (Some(Command::Run { url, args }), _) => run(&url, &args),
         (None, Some(url)) => run(&url, &cli.run),
         (None, None) => {
@@ -228,7 +251,7 @@ fn run(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
     // Le modèle est résolu et chargé avant tout travail réseau : un modèle
     // absent doit échouer immédiatement, pas après plusieurs minutes de
     // téléchargement.
-    let model_path = resolve_model(args)?;
+    let model_path = resolve_model(args, args.quiet)?;
     progress(&format!("Chargement du modèle ({})…", model_path.display()));
     let engine = Engine::load(&model_path)?;
     transcribe::check_translate_supported(engine.model_id(), args.translate)?;
@@ -341,24 +364,116 @@ fn run(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
     )
 }
 
-/// Résout le modèle : `--model-path` s'il est fourni, sinon `--model` dans
-/// `SCRIPTA_MODELS_DIR`.
+/// Résout le modèle et garantit sa présence locale — SPEC SF-03.
 ///
-/// Le téléchargement à la demande relève de la tâche 2.3 (SF-03) ; en attendant,
-/// le modèle doit être mis en place manuellement.
-fn resolve_model(args: &RunArgs) -> scripta_core::Result<PathBuf> {
+/// `--model-path` court-circuite tout : il sert aux modèles absents du
+/// catalogue, ou déposés à la main.
+fn resolve_model(args: &RunArgs, quiet: bool) -> scripta_core::Result<PathBuf> {
     if let Some(p) = &args.model_path {
         return Ok(p.clone());
     }
 
-    let dir =
-        std::env::var_os("SCRIPTA_MODELS_DIR").ok_or_else(|| ScriptaError::ModelUnavailable {
-            detail: "définissez SCRIPTA_MODELS_DIR, ou passez --model-path. \
-                     Le téléchargement automatique arrive au Jalon 2 (SPEC SF-03)."
-                .to_string(),
-        })?;
+    let spec = models::find(&args.model).ok_or_else(|| ScriptaError::ModelUnavailable {
+        detail: format!(
+            "modèle « {} » inconnu (disponibles : auto, {})",
+            args.model,
+            models::aliases().join(", ")
+        ),
+    })?;
 
-    Ok(PathBuf::from(dir).join(format!("ggml-{}.bin", args.model)))
+    fetch_model(spec, quiet)
+}
+
+/// Télécharge un modèle si besoin, en affichant une progression sur `stderr`.
+///
+/// Rien n'est imprimé quand le modèle est déjà en cache : le cas nominal doit
+/// rester silencieux.
+fn fetch_model(spec: &ModelSpec, quiet: bool) -> scripta_core::Result<PathBuf> {
+    let mut annonce = false;
+    let mut dernier = u64::MAX;
+
+    let mut progression = |recus: u64, total: u64| {
+        if quiet || total == 0 {
+            return;
+        }
+        if !annonce {
+            eprintln!("Téléchargement de {} ({} Mo)…", spec.file, spec.size_mb());
+            annonce = true;
+        }
+        let pourcent = recus * 100 / total;
+        if pourcent != dernier {
+            dernier = pourcent;
+            eprint!(
+                "\r  {pourcent:>3} %  ({} / {} Mo)",
+                recus / 1_048_576,
+                total / 1_048_576
+            );
+            if recus >= total {
+                eprintln!("\n  Vérification de l'empreinte…");
+            }
+        }
+    };
+
+    models::ensure(spec, &mut progression)
+}
+
+fn models_cmd(action: &ModelsAction) -> scripta_core::Result<()> {
+    match action {
+        ModelsAction::Path => {
+            println!("{}", models::models_dir()?.display());
+        }
+        ModelsAction::List => {
+            let dir = models::models_dir()?;
+            println!("Cache : {}\n", dir.display());
+            // Les en-têtes passent par des variables : clippy refuse les
+            // littéraux en arguments de format, et le gabarit doit rester
+            // identique à celui des lignes pour que les colonnes s'alignent.
+            let (alias, taille, fichier, etat) = ("ALIAS", "TAILLE", "FICHIER", "ÉTAT");
+            println!("  {alias:<10} {taille:>6}     {fichier:<30} {etat}");
+            for (spec, present) in models::installed()? {
+                println!(
+                    "  {:<10} {:>6} Mo  {:<30} {}",
+                    spec.alias,
+                    spec.size_mb(),
+                    spec.file,
+                    if present { "installé" } else { "-" }
+                );
+            }
+        }
+        ModelsAction::Pull { model } => {
+            let spec = resolve_alias(model)?;
+            let chemin = fetch_model(spec, false)?;
+            println!("{}", chemin.display());
+        }
+        ModelsAction::Rm { model } => {
+            let spec = resolve_alias(model)?;
+            if models::remove(spec)? {
+                eprintln!("Supprimé : {}", spec.file);
+            } else {
+                eprintln!("Absent du cache : {}", spec.file);
+            }
+        }
+        ModelsAction::Verify { model } => {
+            let spec = resolve_alias(model)?;
+            if models::verify(spec)? {
+                eprintln!("Empreinte conforme : {}", spec.file);
+            } else {
+                return Err(ScriptaError::ModelUnavailable {
+                    detail: format!("{} absent ou corrompu", spec.file),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_alias(alias: &str) -> scripta_core::Result<&'static ModelSpec> {
+    models::find(alias).ok_or_else(|| ScriptaError::ModelUnavailable {
+        detail: format!(
+            "modèle « {alias} » inconnu (disponibles : auto, {})",
+            models::aliases().join(", ")
+        ),
+    })
 }
 
 fn write_output(path: Option<&std::path::Path>, content: &str) -> scripta_core::Result<()> {

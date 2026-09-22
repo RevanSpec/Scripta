@@ -17,6 +17,7 @@ pub mod audio;
 pub mod document;
 pub mod error;
 pub mod format;
+pub mod models;
 pub mod probe;
 pub mod transcribe;
 pub mod transcript;
@@ -24,6 +25,7 @@ pub mod url;
 
 pub use document::{Document, Run, Source};
 pub use error::{Result, ScriptaError};
+pub use models::ModelSpec;
 pub use transcribe::{Backend, CancelToken, Engine};
 pub use transcript::{Segment, Transcript, Word};
 pub use url::CanonicalUrl;

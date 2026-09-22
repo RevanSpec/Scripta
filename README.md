@@ -26,7 +26,7 @@ n'est pas encore empaqueté ni distribué.
 | Formats `txt`, `srt`, `vtt`, `json` | ✅ |
 | Horodatage au mot | ✅ |
 | Interruption propre (`Ctrl-C`) | ✅ |
-| Téléchargement automatique des modèles | ⏳ le modèle doit être posé à la main |
+| Téléchargement des modèles, vérifié SHA-256 | ✅ |
 | Accélération GPU | ⏳ compilable, non distribuée |
 | Sous-titres YouTube officiels | ⏳ |
 | Application de bureau | ⏳ |
@@ -132,16 +132,22 @@ backend compilé.
 
 ## Démarrage rapide
 
-Le téléchargement automatique des modèles n'est pas encore livré : posez le
-fichier à la main.
+Le modèle est téléchargé au premier usage et vérifié par empreinte SHA-256.
+Il n'y a rien à préparer.
 
 ```bash
-export SCRIPTA_MODELS_DIR="$HOME/.cache/scripta/models"
-mkdir -p "$SCRIPTA_MODELS_DIR"
-curl -L -o "$SCRIPTA_MODELS_DIR/ggml-base.bin" \
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+scripta "https://www.youtube.com/watch?v=<ID>"
+```
 
-scripta -m base "https://www.youtube.com/watch?v=<ID>"
+`--model auto`, le défaut, choisit `turbo` si un backend GPU est compilé et
+`base` sinon. La gestion du cache passe par `scripta models` :
+
+```bash
+scripta models list          # catalogue et état local
+scripta models pull small    # pré-télécharge
+scripta models verify small  # recalcule l'empreinte
+scripta models rm small
+scripta models path
 ```
 
 | Modèle | Taille | Remarque |
@@ -181,7 +187,7 @@ scripta -m large-v3 --translate "<URL>"
 
 | Option | Effet |
 |---|---|
-| `-m, --model <NOM>` | modèle, résolu dans `SCRIPTA_MODELS_DIR` |
+| `-m, --model <NOM>` | `auto` (défaut), `tiny`, `base`, `small`, `medium`, `large-v3`, `turbo` |
 | `--model-path <CHEMIN>` | chemin explicite, prioritaire |
 | `-f, --format <FORMAT>` | `txt` (défaut), `srt`, `vtt`, `json` |
 | `-o, --output <CHEMIN>` | fichier de sortie ; `stdout` par défaut |

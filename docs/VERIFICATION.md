@@ -33,25 +33,26 @@ compilé — `cpu` en l'absence de feature, conformément à
 
 ## 1. Modèle
 
-Le téléchargement automatique arrive avec la tâche 2.3. En attendant, poser le
-fichier à la main.
+Téléchargé au premier usage et vérifié par empreinte SHA-256 — il n'y a rien à
+préparer. Pour anticiper :
 
 ```powershell
-$env:SCRIPTA_MODELS_DIR = "$HOME\.cache\scripta\models"
-New-Item -ItemType Directory -Force $env:SCRIPTA_MODELS_DIR | Out-Null
-Invoke-WebRequest `
-  -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" `
-  -OutFile "$env:SCRIPTA_MODELS_DIR\ggml-base.bin"
+scripta models list
+scripta models pull base
+scripta models verify base
 ```
 
-> Le dépôt est bien **`ggerganov/whisper.cpp`**. `ggml-org/whisper.cpp` renvoie
-> HTTP 401 en accès anonyme ([SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper)).
+Le cache va dans `%LOCALAPPDATA%\scripta\models` sous Windows, `~/.cache/scripta/models`
+ailleurs. `SCRIPTA_MODELS_DIR` prime sur ce choix.
 
-| Modèle | Taille | Usage |
-|---|---|---|
-| `ggml-tiny.bin` | 75 Mo | tests rapides |
-| `ggml-base.bin` | 142 Mo | défaut CPU |
-| `ggml-small-q5_1.bin` | 190 Mo | bon compromis |
+**Test de corruption** — un modèle altéré doit être détecté, pas transmis à
+whisper :
+
+```powershell
+Add-Content "$(scripta models path)\ggml-base.bin" "corrompu"
+scripta models verify base      # doit échouer avec le code 30
+scripta models pull base        # doit le retélécharger
+```
 
 ---
 
