@@ -256,7 +256,7 @@ fn sidecar_spawn_error(path: &Path, name: &str, e: std::io::Error) -> ScriptaErr
 const PREALLOC_MARGIN: f64 = 1.02;
 
 /// Nombre d'échantillons à pré-allouer pour une durée annoncée.
-fn preallocation_len(expected_duration_s: Option<f64>) -> usize {
+pub fn preallocation_len(expected_duration_s: Option<f64>) -> usize {
     expected_duration_s
         .filter(|d| d.is_finite() && *d > 0.0)
         .map(|d| (d * PREALLOC_MARGIN * SAMPLE_RATE as f64) as usize)

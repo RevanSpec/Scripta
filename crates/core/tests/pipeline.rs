@@ -199,3 +199,38 @@ fn aucun_fichier_temporaire_n_est_cree() {
         "des fichiers ont été créés pendant l'extraction"
     );
 }
+
+/// Le tampon audio ne doit pas être réalloué quand le flux dépasse légèrement
+/// la durée annoncée — ce qui est le cas systématique, `yt-dlp` arrondissant à
+/// la seconde inférieure.
+///
+/// Une réallocation double la capacité : sur une heure d'audio, 223 Mo
+/// deviennent 446 Mo, et l'ancien tampon coexiste avec le nouveau le temps de
+/// la copie. C'est une vérification directe de l'allocation, là où la mémoire
+/// résidente du processus est un instrument trop grossier.
+#[test]
+fn le_tampon_audio_n_est_pas_realloue() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // 1,0 s annoncée ; le flux en livre 1,002 — même écart relatif que celui
+    // mesuré en conditions réelles (3 664 s décodées pour 3 657 annoncées).
+    let duree_annoncee = 1.0_f64;
+    let octets = 16_032 * 2; // 16 032 échantillons s16le
+    let sc = Sidecars::new(
+        sidecar(dir.path(), "ytdlp-so4096"),
+        sidecar(dir.path(), &format!("ffmpeg-so{octets}")),
+    );
+
+    let samples = audio::extract(&sc, &url_test(), Some(duree_annoncee)).expect("extraction");
+
+    assert_eq!(samples.len(), 16_032, "flux tronqué");
+    assert!(
+        samples.len() > (duree_annoncee * 16_000.0) as usize,
+        "le test doit bien dépasser la durée annoncée"
+    );
+    assert_eq!(
+        samples.capacity(),
+        audio::preallocation_len(Some(duree_annoncee)),
+        "le tampon a été réalloué : la marge de pré-allocation ne joue plus"
+    );
+}

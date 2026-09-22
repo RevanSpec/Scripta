@@ -188,10 +188,10 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
   | Poste | Échelle |
   |---|---|
   | PCM `f32` (notre tampon) | 223 Mo/h (16 000 × 4 octets) |
+  | Tampons de calcul ggml | ≈ 337 Mo, mesurés, pour `base` |
   | **Copie padded de whisper.cpp** | 223 Mo/h + 1,8 Mo de padding fixe |
   | Spectrogramme mel | 112 Mo/h (80 bandes × 100 trames/s × 4 octets) |
   | Modèle | 75 Mo à 1,1 Go selon la variante |
-  | Tampons de calcul | ≈ 115 Mo, indépendants de la durée |
 
   > **Corrigé au Jalon 2, en deux temps.** La v2.0 annonçait 230 Mo/h en ne
   > comptant que le PCM. Deux postes majeurs manquaient :
@@ -208,6 +208,16 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
   > **Optimisation possible (v2) :** notre tampon reste vivant pendant toute
   > l'inférence alors que whisper n'en a plus besoin après le mel. L'API
   > `full(&[f32])` de `whisper-rs` interdit de le libérer plus tôt.
+  >
+  > **Réservé n'est pas résident.** Le doublement du `Vec` portait sur
+  > l'espace d'adressage, pas sur la mémoire physique : la moitié haute de la
+  > capacité n'était jamais écrite, donc jamais résidente. Deux mesures
+  > successives, avant et après correctif, ont donné **1 039 Mo à l'octet
+  > près** — par construction, et non par coïncidence. Corriger la
+  > pré-allocation reste utile (une recopie de 224 Mo évitée, l'espace
+  > d'adressage divisé par deux) mais ne réduit pas l'empreinte physique.
+  > Le seul instrument fiable ici est l'allocation elle-même, vérifiée par
+  > `le_tampon_audio_n_est_pas_realloue`.
 
 - Une garde `--max-duration` (défaut 240 min) protège contre les vidéos pathologiques. À 4 h, l'empreinte approcherait 1,7 Go.
 - L'affichage progressif de la GUI est alimenté par le **callback de nouveaux segments** de whisper.cpp, pas par un découpage. whisper.cpp traite l'audio séquentiellement par fenêtres de 30 s et émet ses segments au fil de l'eau : le rendu est donc bien progressif, simplement il démarre une fois le téléchargement achevé.

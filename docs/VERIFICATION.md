@@ -187,8 +187,8 @@ le contournement R9.
 | Grandeur | Mesuré |
 |---|---|
 | Code de sortie | `0` |
-| Durée totale | 1 786 s (29,8 min) |
-| Vitesse | **2,1 × temps réel** |
+| Durée totale | 1 364 s (22,7 min) |
+| Vitesse | **2,7 × temps réel** (une première mesure à 2,1 × était faussée par une compilation concurrente) |
 | Crête mémoire | **1 039 Mo** |
 | Langue détectée | `fr` |
 | Segments | 1 467 |
@@ -202,9 +202,16 @@ le contournement R9.
    yt-dlp qui arrondit. C'est aussi la cause du doublement du tampon audio,
    corrigé depuis par une marge de 2 % à la pré-allocation.
 
-2. **Les 1 039 Mo se décomposent** en 446 (PCM doublé par le défaut ci-dessus)
-   + 112 (mel) + 141 (modèle) + 340 (état whisper). Sans le doublement,
-   l'attendu descend à **≈ 820 Mo**.
+2. **Les 1 039 Mo se décomposent** en 224 (notre tampon) + 225 (copie padded
+   de whisper) + 112 (mel) + 141 (modèle) + 337 (tampons de calcul ggml).
+   L'audio réside **deux fois** en mémoire pendant le calcul du mel.
+
+   Une seconde mesure après correction de la pré-allocation a rendu
+   **exactement 1 039 Mo**. Ce n'est pas une coïncidence : le doublement du
+   tampon portait sur l'espace d'adressage réservé, dont la moitié haute
+   n'était jamais écrite ni résidente. Le correctif évite une recopie de
+   224 Mo et divise l'adressage par deux, mais l'empreinte physique est
+   inchangée — elle ne pouvait pas l'être.
 
 3. **Les répétitions ne sont pas des hallucinations.** `[Musique]` est un
    étiquetage correct des passages musicaux, `C'est ça.` une locution réelle.
