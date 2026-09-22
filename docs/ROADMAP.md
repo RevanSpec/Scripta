@@ -302,6 +302,7 @@ Aucune de ces tâches ne conditionne la v1.0.
 | R6 | Seuils de performance non atteints | Faible | Moyenne | J2 | Seuils mesurés puis inscrits, pas promis à l'avance |
 | R7 | Deadlock `stderr` découvert tardivement | Élevé | **Écartée par construction** | J1 | Test de non-régression dédié (1.8), exigé en critère de sortie |
 | R8 | Dérive de périmètre vers la GUI avant stabilisation du cœur | Moyen | Moyenne | J2/J3 | J3 bloqué tant que J2 n'est pas clos ; publier la **v0.1.0 CLI** pour matérialiser la valeur intermédiaire |
+| R9 | **`--release` produit un whisper.cpp non optimisé sous MSVC** | **Élevé** | **Avérée** | J4 | Mesuré : 4 à 6× plus lent qu'en debug. La crate `cmake` écrase `CMAKE_CXX_FLAGS_<BUILD_TYPE>` tandis que le générateur Visual Studio compile en `--config Release` ; en profil release la config utilisée perd son `/O2`. **Bloquant pour l'empaquetage** : en l'état les artefacts distribués seraient non optimisés. Piste : forcer `CMAKE_CXX_FLAGS_RELEASE` par l'environnement, que le `build.rs` de `whisper-rs-sys` réinjecte en define. À vérifier aussi sous Linux et macOS, où le générateur diffère. |
 
 ---
 

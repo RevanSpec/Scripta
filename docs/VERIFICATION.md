@@ -78,12 +78,24 @@ totale est multipliée par quarante.
 
 ## 3. Formats de sortie
 
-**Compiler en `--release`.** Une build de débogage est cinq à dix fois plus
-lente : toute mesure de vitesse y est dénuée de sens.
+> **⚠ Sur Windows/MSVC, employer la build de débogage.**
+>
+> Contre-intuitif, mais mesuré : `--release` embarque un whisper.cpp **non
+> optimisé** et se révèle quatre à six fois plus lente. Sur 11 s d'audio avec
+> le modèle `tiny` : **1,8 s en debug contre 7,7 à 11,2 s en release**.
+>
+> La crate `cmake` écrase `CMAKE_CXX_FLAGS_<BUILD_TYPE>`, alors que le
+> générateur Visual Studio compile toujours en `--config Release`. En profil
+> debug elle écrase `RELWITHDEBINFO` — sans effet, la config `Release`
+> conserve son `/O2 /Ob2` par défaut. En profil release elle écrase
+> précisément la config utilisée, et `/O2` disparaît.
+>
+> Conséquence pour l'empaquetage : **en l'état, les artefacts du Jalon 4
+> seraient distribués non optimisés.**
 
 ```powershell
-cargo build --release --workspace
-$S = ".\target\release\scripta.exe"
+cargo build --workspace
+$S = ".\target\debug\scripta.exe"
 $U = "https://youtu.be/jNQXAC9IVRw"   # « Me at the zoo », 19 s
 ```
 
@@ -197,7 +209,7 @@ $d = Get-Content out.json -Raw | ConvertFrom-Json
 | Mémoire crête | ≈ 230 Mo/h d'audio + taille du modèle. Une croissance très supérieure signale une fuite. |
 | Code de sortie | `0` |
 | Segments | Couvrent toute la durée, sans trou ni répétition en boucle |
-| Vitesse | À comparer aux seuils du [§5.2](SPEC.md#52-performance) — **en `--release` uniquement** |
+| Vitesse | À comparer aux seuils du [§5.2](SPEC.md#52-performance), en gardant à l'esprit le défaut d'optimisation ci-dessus |
 
 ### Hallucinations
 
