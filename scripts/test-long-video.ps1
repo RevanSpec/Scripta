@@ -56,13 +56,48 @@ Set-Location $Root
 # ---------------------------------------------------------------- prérequis --
 Section "Prérequis"
 
-foreach ($outil in @("cargo", "yt-dlp", "ffmpeg")) {
-    $cmd = Get-Command $outil -ErrorAction SilentlyContinue
-    if (-not $cmd) {
-        Write-Host "  $outil : ABSENT" -ForegroundColor Red
-        throw "$outil est requis. Voir README.md, section Installation."
+# Une installation par winget met à jour le PATH persistant, mais jamais celui
+# des sessions déjà ouvertes : un terminal lancé avant l'installation ne voit
+# rien. Plutôt que d'exiger un redémarrage, on recharge le PATH depuis le
+# registre, puis on sonde les emplacements connus.
+function Resolve-Tool {
+    param([Parameter(Mandatory)] [string] $Nom)
+
+    $c = Get-Command $Nom -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+
+    # Ajouté au PATH de session, jamais substitué : l'utilisateur peut y avoir
+    # placé des chemins qui ne sont pas dans le registre.
+    $persistant = @(
+        [Environment]::GetEnvironmentVariable("Path", "Machine")
+        [Environment]::GetEnvironmentVariable("Path", "User")
+    ) -join ';'
+    $env:PATH = "$env:PATH;$persistant"
+
+    $c = Get-Command $Nom -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+
+    foreach ($dossier in @(
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links")
+        (Join-Path $env:USERPROFILE ".cargoin")
+        "$env:ProgramFilesfmpegin"
+    )) {
+        $p = Join-Path $dossier "$Nom.exe"
+        if (Test-Path $p) {
+            $env:PATH = "$dossier;$env:PATH"
+            return $p
+        }
     }
-    Write-Host "  $outil : $($cmd.Source)"
+    return $null
+}
+
+foreach ($outil in @("cargo", "yt-dlp", "ffmpeg")) {
+    $chemin = Resolve-Tool $outil
+    if (-not $chemin) {
+        Write-Host "  $outil : ABSENT" -ForegroundColor Red
+        throw "$outil est introuvable. Installation : voir README.md."
+    }
+    Write-Host "  $outil : $chemin"
 }
 
 # ------------------------------------------------------------------- build ---
@@ -120,7 +155,9 @@ $pcmMo = $dureeAudio * 16000 * 4 / 1MB
 Write-Host ("  {0}" -f $meta.title)
 Write-Host ("  Durée            : {0:N0} s = {1:N1} min" -f $dureeAudio, ($dureeAudio / 60))
 Write-Host ("  PCM f32 attendu  : {0:N1} Mo" -f $pcmMo)
-Write-Host ("  Crête prévue     : {0:N0} Mo (PCM + modèle + état)" -f ($pcmMo + ((Get-Item $ModelPath).Length / 1MB) + 100))
+$overheadMo = 160   # état de whisper.cpp, mesuré, indépendant de la durée
+$cretePrevueMo = $pcmMo + ((Get-Item $ModelPath).Length / 1MB) + $overheadMo
+Write-Host ("  Crête prévue     : {0:N0} Mo (PCM + modèle + état)" -f $cretePrevueMo)
 
 # ---------------------------------------------------------------- exécution --
 Section "Transcription"
@@ -136,6 +173,10 @@ $cliArgs = @("-m", $Model, "-f", "json", "-o", $Json, "--", $Url)
 $p = Start-Process -FilePath $Exe -ArgumentList $cliArgs -PassThru -NoNewWindow `
                    -RedirectStandardError $ErrLog
 
+# PowerShell libère le handle du processus dès sa terminaison, et ExitCode
+# revient alors vide. Lire .Handle le met en cache et préserve le code.
+$null = $p.Handle
+
 $peak = 0L
 $debut = Get-Date
 while (-not $p.HasExited) {
@@ -145,6 +186,7 @@ while (-not $p.HasExited) {
     } catch { }   # le processus peut disparaître entre Refresh et lecture
     Start-Sleep -Milliseconds 500
 }
+$p.WaitForExit()
 $ecoule = (Get-Date) - $debut
 $code = $p.ExitCode
 
@@ -176,13 +218,20 @@ Write-Host ("  Segments         : {0}" -f $segments.Count)
 # --------------------------------------------------------------- verdicts ----
 Section "Verdicts"
 
-# 1. Mémoire — c'est la prédiction de l'ADR-003 qui est jugée ici.
-$moParHeure = ($peak / 1MB) / ($dureeAudio / 3600)
-Write-Host ("  Mémoire par heure d'audio : {0:N0} Mo (PCM seul prédit : 230 Mo)" -f $moParHeure)
-if ($moParHeure -lt 800) {
-    Write-Host "  [OK]   Empreinte conforme à l'ordre de grandeur attendu." -ForegroundColor Green
+# 1. Mémoire — on confronte la crête à la prédiction, et non à un ratio
+#    horaire : sur une vidéo courte l'état fixe de whisper domine, et le
+#    ratio exploserait sans que rien n'aille mal.
+Write-Host ("  Crête mesurée / prévue    : {0:N0} Mo / {1:N0} Mo" -f ($peak / 1MB), $cretePrevueMo)
+if (($peak / 1MB) -lt ($cretePrevueMo * 1.5)) {
+    Write-Host "  [OK]   Empreinte conforme à la prédiction." -ForegroundColor Green
 } else {
     Write-Host "  [ALERTE] Empreinte très supérieure : fuite probable." -ForegroundColor Red
+}
+if ($dureeAudio -gt 600) {
+    # Au-delà de dix minutes, le PCM domine : le ratio horaire redevient
+    # parlant et se confronte aux 230 Mo/h de l'ADR-003.
+    $moParHeure = ($peak / 1MB) / ($dureeAudio / 3600)
+    Write-Host ("  Mémoire par heure d'audio : {0:N0} Mo (PCM seul prédit : 230 Mo)" -f $moParHeure)
 }
 
 # 2. Couverture — des segments qui s'arrêtent à mi-parcours trahissent un flux
