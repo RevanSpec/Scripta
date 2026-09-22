@@ -14,3 +14,4 @@ path = "src/main.rs"
 [dependencies]
 scripta-core.workspace = true
 clap.workspace = true
+ctrlc = "3"

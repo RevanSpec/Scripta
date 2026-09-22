@@ -226,6 +226,73 @@ fn l_annulation_interrompt_l_inference() {
     }
 }
 
+/// Les mots sont reconstruits depuis les tokens BPE de whisper — « bonjour »
+/// peut arriver en « bon » + « jour ». Sans cette reconstruction, le champ
+/// `words` du JSON resterait vide alors que le schéma le promet (SF-05).
+#[test]
+fn reconstruit_les_mots_depuis_les_tokens() {
+    let f = fixtures_or_skip!();
+
+    let transcript = f
+        .engine
+        .transcribe(
+            &f.samples,
+            &Options {
+                word_timestamps: true,
+                ..Default::default()
+            },
+            Hooks::default(),
+        )
+        .expect("inférence");
+
+    let segment = transcript.segments.first().expect("au moins un segment");
+    assert!(!segment.words.is_empty(), "aucun mot reconstruit");
+
+    for mot in &segment.words {
+        assert!(!mot.word.is_empty(), "mot vide");
+        assert!(
+            !mot.word.starts_with(' '),
+            "espace initiale non retirée : {:?}",
+            mot.word
+        );
+        assert!(mot.end >= mot.start, "bornes inversées : {mot:?}");
+        assert!(
+            mot.start >= segment.start - 0.01 && mot.end <= segment.end + 0.01,
+            "mot hors des bornes du segment : {mot:?}"
+        );
+        assert!(
+            mot.probability.is_some_and(|p| (0.0..=1.0).contains(&p)),
+            "probabilité hors bornes : {mot:?}"
+        );
+    }
+
+    // Les mots recomposés doivent restituer le texte du segment.
+    let recompose = segment
+        .words
+        .iter()
+        .map(|w| w.word.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        recompose.to_lowercase().contains("fellow"),
+        "recomposition incohérente : {recompose}"
+    );
+}
+
+/// Sans `word_timestamps`, le champ reste vide : le coût de la reconstruction
+/// n'est payé que sur demande.
+#[test]
+fn pas_de_mots_sans_horodatage_demande() {
+    let f = fixtures_or_skip!();
+
+    let transcript = f
+        .engine
+        .transcribe(&f.samples, &Options::default(), Hooks::default())
+        .expect("inférence");
+
+    assert!(transcript.segments.iter().all(|s| s.words.is_empty()));
+}
+
 #[test]
 fn un_buffer_vide_est_refuse() {
     let f = fixtures_or_skip!();

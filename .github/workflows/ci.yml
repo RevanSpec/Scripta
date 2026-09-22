@@ -31,6 +31,18 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
 
+      # Contournement du risque R9 (docs/ROADMAP.md). La crate `cmake` écrase
+      # CMAKE_CXX_FLAGS_<BUILD_TYPE> ; avec le générateur Visual Studio, qui
+      # compile en --config Release, le profil release perd son /O2 et produit
+      # un whisper.cpp 4 à 6x plus lent. Le build.rs de whisper-rs-sys
+      # réinjecte toute variable CMAKE_* en define, et ces defines gagnent.
+      - name: Optimisation MSVC (R9)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "CMAKE_C_FLAGS_RELEASE=/MD /O2 /Ob2 /DNDEBUG"   | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAKE_CXX_FLAGS_RELEASE=/MD /O2 /Ob2 /DNDEBUG" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
       # bindgen ne trouve pas toujours libclang seul sous Windows.
       - name: LIBCLANG_PATH (Windows)
         if: runner.os == 'Windows'
@@ -44,9 +56,10 @@ jobs:
             Write-Host "libclang non trouvé à l'emplacement attendu ; bindgen tentera sa propre détection."
           }
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # La version vient de rust-toolchain.toml, jamais d'ici : un `@stable`
+      # ferait diverger la CI du poste de travail à chaque publication de Rust.
+      - name: Toolchain
+        run: rustup show
       - uses: Swatinem/rust-cache@v2
 
       - name: Format

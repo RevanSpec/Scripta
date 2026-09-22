@@ -154,12 +154,101 @@ fn tail(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Second énoncé, indépendant, de la table SF-07.
+    ///
+    /// Ce `match` est **exhaustif** : ajouter une variante sans lui attribuer
+    /// de code ici casse la compilation. C'est l'effet recherché — ces codes
+    /// sont contractuels, des scripts en dépendent, et une variante silencieuse
+    /// qui hériterait d'un code voisin passerait inaperçue.
+    fn code_attendu(e: &ScriptaError) -> i32 {
+        match e {
+            ScriptaError::InvalidUrl(_) => 10,
+            ScriptaError::Unavailable { .. } => 11,
+            ScriptaError::AuthRequired { .. } => 12,
+            ScriptaError::LiveNotSupported => 13,
+            ScriptaError::TooLong { .. } => 14,
+            ScriptaError::ExtractionFailed { .. } => 20,
+            ScriptaError::SidecarMissing { .. } => 21,
+            ScriptaError::ModelUnavailable { .. } => 30,
+            ScriptaError::InferenceFailed { .. } => 40,
+            ScriptaError::OutputFailed { .. } => 50,
+            ScriptaError::Interrupted => 130,
+        }
+    }
+
+    /// Une instance de chaque variante.
+    fn toutes_les_variantes() -> Vec<ScriptaError> {
+        vec![
+            ScriptaError::InvalidUrl("x".into()),
+            ScriptaError::Unavailable {
+                detail: String::new(),
+            },
+            ScriptaError::AuthRequired {
+                detail: String::new(),
+            },
+            ScriptaError::LiveNotSupported,
+            ScriptaError::TooLong {
+                actual_min: 300,
+                limit_min: 240,
+            },
+            ScriptaError::ExtractionFailed {
+                detail: String::new(),
+            },
+            ScriptaError::SidecarMissing {
+                name: "yt-dlp".into(),
+            },
+            ScriptaError::ModelUnavailable {
+                detail: String::new(),
+            },
+            ScriptaError::InferenceFailed {
+                detail: String::new(),
+            },
+            ScriptaError::OutputFailed {
+                path: std::path::PathBuf::from("/x"),
+                source: std::io::Error::other("x"),
+            },
+            ScriptaError::Interrupted,
+        ]
+    }
+
     #[test]
-    fn codes_de_sortie_stables() {
-        // Ces valeurs sont contractuelles : un changement casse les appelants.
-        assert_eq!(ScriptaError::InvalidUrl("x".into()).exit_code(), 10);
-        assert_eq!(ScriptaError::LiveNotSupported.exit_code(), 13);
-        assert_eq!(ScriptaError::Interrupted.exit_code(), 130);
+    fn tous_les_codes_de_sortie_sont_figes() {
+        for e in toutes_les_variantes() {
+            assert_eq!(e.exit_code(), code_attendu(&e), "{e:?}");
+        }
+    }
+
+    #[test]
+    fn aucun_code_de_sortie_n_est_partage() {
+        // Deux variantes partageant un code rendraient le diagnostic ambigu
+        // pour un script appelant.
+        let mut vus = std::collections::HashMap::new();
+        for e in toutes_les_variantes() {
+            let code = e.exit_code();
+            if let Some(precedent) = vus.insert(code, format!("{e:?}")) {
+                panic!("code {code} partagé par {precedent} et {e:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn les_codes_restent_dans_les_bornes_posix() {
+        // Un code supérieur à 255 serait tronqué par le shell.
+        for e in toutes_les_variantes() {
+            let c = e.exit_code();
+            assert!((1..=255).contains(&c), "code hors bornes : {c} pour {e:?}");
+        }
+    }
+
+    #[test]
+    fn chaque_variante_porte_un_message_utile() {
+        for e in toutes_les_variantes() {
+            let msg = e.to_string();
+            assert!(!msg.is_empty(), "message vide : {e:?}");
+            // Un message qui se réduit au nom de la variante n'apprend rien
+            // à l'utilisateur.
+            assert!(msg.len() > 15, "message trop laconique : {msg}");
+        }
     }
 
     #[test]

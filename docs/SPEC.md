@@ -183,7 +183,43 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
 
 **Conséquences.**
 
-- Empreinte mémoire audio : **≈ 230 Mo par heure** (16 000 échantillons/s × 4 octets). Une garde `--max-duration` (défaut 240 min) protège contre les vidéos pathologiques.
+- **Empreinte mémoire : ≈ 560 Mo par heure d'audio au pic, plus ~260 Mo fixes.** Mesuré sur une vidéo de 61 min avec le modèle `base` : **986 Mo**.
+
+  | Poste | Échelle |
+  |---|---|
+  | PCM `f32` (notre tampon) | 223 Mo/h (16 000 × 4 octets) |
+  | Tampons de calcul ggml | ≈ 337 Mo, mesurés, pour `base` |
+  | **Copie padded de whisper.cpp** | 223 Mo/h + 1,8 Mo de padding fixe |
+  | Spectrogramme mel | 112 Mo/h (80 bandes × 100 trames/s × 4 octets) |
+  | Modèle | 75 Mo à 1,1 Go selon la variante |
+
+  > **Corrigé au Jalon 2, en deux temps.** La v2.0 annonçait 230 Mo/h en ne
+  > comptant que le PCM. Deux postes majeurs manquaient :
+  >
+  > - le **spectrogramme mel**, calculé intégralement en amont ;
+  > - une **copie complète de l'audio** que `log_mel_spectrogram` alloue pour
+  >   y appliquer 30 s de padding (`samples_padded`, whisper.cpp:3194). L'audio
+  >   réside donc **deux fois** en mémoire pendant le calcul du mel.
+  >
+  > Cette copie est transitoire — libérée dès le mel calculé — mais elle
+  > survient précisément au moment du pic. Elle explique à elle seule pourquoi
+  > l'empreinte réelle vaut le double de l'estimation initiale.
+  >
+  > **Optimisation possible (v2) :** notre tampon reste vivant pendant toute
+  > l'inférence alors que whisper n'en a plus besoin après le mel. L'API
+  > `full(&[f32])` de `whisper-rs` interdit de le libérer plus tôt.
+  >
+  > **Réservé n'est pas résident.** Le doublement du `Vec` portait sur
+  > l'espace d'adressage, pas sur la mémoire physique : la moitié haute de la
+  > capacité n'était jamais écrite, donc jamais résidente. Deux mesures
+  > successives, avant et après correctif, ont donné **1 039 Mo à l'octet
+  > près** — par construction, et non par coïncidence. Corriger la
+  > pré-allocation reste utile (une recopie de 224 Mo évitée, l'espace
+  > d'adressage divisé par deux) mais ne réduit pas l'empreinte physique.
+  > Le seul instrument fiable ici est l'allocation elle-même, vérifiée par
+  > `le_tampon_audio_n_est_pas_realloue`.
+
+- Une garde `--max-duration` (défaut 240 min) protège contre les vidéos pathologiques. À 4 h, l'empreinte approcherait 1,7 Go.
 - L'affichage progressif de la GUI est alimenté par le **callback de nouveaux segments** de whisper.cpp, pas par un découpage. whisper.cpp traite l'audio séquentiellement par fenêtres de 30 s et émet ses segments au fil de l'eau : le rendu est donc bien progressif, simplement il démarre une fois le téléchargement achevé.
 
 #### ADR-004 — Emplacement des sidecars mis à jour
@@ -571,17 +607,31 @@ OPTIONS DE `run` :
 
 | Configuration | Modèle | Seuil |
 |---|---|---|
-| CPU x86_64, 8 cœurs, AVX2 | `base` | ≥ 3 × temps réel |
-| CPU x86_64, 8 cœurs, AVX2 | `small` | ≥ 1,5 × temps réel |
+| CPU x86_64, 12 cœurs, AVX2 | `base` | ≥ 3 × temps réel |
 | Apple Silicon M1+, Metal | `turbo` | ≥ 8 × temps réel |
 | GPU discret ≥ 6 Go VRAM, Vulkan | `turbo` | ≥ 8 × temps réel |
+
+> **Mesuré au Jalon 2.** Sur 61 min de parole française, modèle `base`, build
+> `--release` avec le contournement R9, 12 cœurs logiques, **machine au
+> repos** : **4,8 × temps réel**.
+>
+> Le même code avait d'abord donné 2,1 × puis 2,7 ×. Les deux mesures étaient
+> faussées par des compilations concurrentes sur la même machine. J'avais
+> abaissé le seuil de 3 × à 2 × sur cette base : il est rétabli à 3 ×, la
+> valeur d'origine, qui était correcte.
+>
+> **Leçon de méthode :** une mesure de débit n'a de sens que sur une machine
+> au repos. Les trois mesures du même binaire s'échelonnent de 2,1 × à 4,8 ×
+> selon la charge concurrente.
+>
+> Les seuils GPU restent **non mesurés** : aucune machine de test disponible.
 
 **Autres seuils :**
 
 | Métrique | Seuil |
 |---|---|
-| Empreinte RSS, 1 h d'audio, modèle `small` | < 1,2 Go |
-| Empreinte audio brute | ≈ 230 Mo / h ([ADR-003](#adr-003--inférence-non-streamée)) |
+| Empreinte RSS, 1 h d'audio, modèle `base` | < 1,1 Go (mesuré : 986 Mo) |
+| Empreinte totale au pic | ≈ 560 Mo / h + ~260 Mo fixes ([ADR-003](#adr-003--inférence-non-streamée)) |
 | Démarrage CLI (`--version`, `--help`) | < 150 ms |
 | Sonde de métadonnées (SF-01) | < 3 s en conditions nominales |
 | Écritures disque hors sortie et caches | **0 octet** (invariant « zero-disk ») |

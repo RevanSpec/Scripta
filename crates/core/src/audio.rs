@@ -106,8 +106,9 @@ pub fn extract(
     sidecars: &Sidecars,
     url: &CanonicalUrl,
     expected_duration_s: Option<f64>,
+    access: &crate::probe::Access,
 ) -> Result<Vec<f32>> {
-    let mut dl = spawn_downloader(&sidecars.ytdlp, url)?;
+    let mut dl = spawn_downloader(&sidecars.ytdlp, url, access)?;
 
     // Le stdout de yt-dlp devient le stdin de ffmpeg : câblage direct par
     // descripteur, sans processus shell intermédiaire (ADR-002).
@@ -181,7 +182,11 @@ pub fn extract(
     Ok(samples)
 }
 
-fn spawn_downloader(ytdlp: &Path, url: &CanonicalUrl) -> Result<Child> {
+fn spawn_downloader(
+    ytdlp: &Path,
+    url: &CanonicalUrl,
+    access: &crate::probe::Access,
+) -> Result<Child> {
     Command::new(ytdlp)
         .args([
             "-q",
@@ -191,10 +196,11 @@ fn spawn_downloader(ytdlp: &Path, url: &CanonicalUrl) -> Result<Child> {
             "bestaudio[ext=webm]/bestaudio/best",
             "-o",
             "-",
-            // `--` clôt les options : aucun argument suivant ne peut être
-            // réinterprété comme un drapeau.
-            "--",
         ])
+        .args(access.args())
+        // `--` clôt les options : aucun argument suivant ne peut être
+        // réinterprété comme un drapeau.
+        .arg("--")
         .arg(url.as_str())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -242,16 +248,32 @@ fn sidecar_spawn_error(path: &Path, name: &str, e: std::io::Error) -> ScriptaErr
     }
 }
 
+/// Marge sur la pré-allocation du tampon audio.
+///
+/// La durée annoncée par `yt-dlp` est arrondie et **sous-estime
+/// systématiquement** le flux réellement décodé : sur une vidéo de 19 s,
+/// 304 089 échantillons arrivent pour 304 000 attendus. Sans marge, la
+/// capacité est donc toujours dépassée — d'un cheveu, mais `Vec` double
+/// quand même.
+///
+/// Sur une heure d'audio, ce doublement fait passer le tampon de 223 à
+/// 446 Mo, et l'ancien coexiste avec le nouveau le temps de la copie : un pic
+/// transitoire de 670 Mo. La marge de 2 % coûte 4,5 Mo et l'évite.
+const PREALLOC_MARGIN: f64 = 1.02;
+
+/// Nombre d'échantillons à pré-allouer pour une durée annoncée.
+pub fn preallocation_len(expected_duration_s: Option<f64>) -> usize {
+    expected_duration_s
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .map(|d| (d * PREALLOC_MARGIN * SAMPLE_RATE as f64) as usize)
+        .unwrap_or(SAMPLE_RATE as usize * 60)
+}
+
 fn read_samples(
     mut stdout: std::process::ChildStdout,
     expected_duration_s: Option<f64>,
 ) -> std::io::Result<Vec<f32>> {
-    let mut out = Vec::with_capacity(
-        expected_duration_s
-            .filter(|d| d.is_finite() && *d > 0.0)
-            .map(|d| (d * SAMPLE_RATE as f64) as usize)
-            .unwrap_or(SAMPLE_RATE as usize * 60),
-    );
+    let mut out = Vec::with_capacity(preallocation_len(expected_duration_s));
     let mut decoder = PcmDecoder::new();
     let mut buf = vec![0u8; READ_CHUNK];
 
@@ -368,6 +390,36 @@ mod tests {
         d.push(&[0x00, 0x80, 0x42], &mut out);
         assert_eq!(out.len(), 1);
         assert!(d.has_pending_byte());
+    }
+
+    #[test]
+    fn la_preallocation_absorbe_le_depassement_reel() {
+        // Cas mesuré : 19,0 s annoncées, 304 089 échantillons décodés.
+        let capacite = preallocation_len(Some(19.0));
+        assert!(
+            capacite >= 304_089,
+            "capacité {capacite} insuffisante : le Vec doublerait"
+        );
+
+        // Sur une heure, le doublement coûterait un pic transitoire de 670 Mo.
+        let heure = preallocation_len(Some(3657.0));
+        assert!(heure >= 3657 * SAMPLE_RATE as usize);
+        // La marge reste modeste : quelques mégaoctets, pas un doublement.
+        assert!(heure < (3657.0 * 1.05 * SAMPLE_RATE as f64) as usize);
+    }
+
+    #[test]
+    fn preallocation_robuste_aux_durees_aberrantes() {
+        let defaut = SAMPLE_RATE as usize * 60;
+        for aberrante in [
+            None,
+            Some(0.0),
+            Some(-1.0),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+        ] {
+            assert_eq!(preallocation_len(aberrante), defaut, "{aberrante:?}");
+        }
     }
 
     #[test]

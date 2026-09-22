@@ -29,6 +29,13 @@ pub struct Metadata {
     pub duration: Option<f64>,
     #[serde(default)]
     pub upload_date: Option<String>,
+    /// Langue déclarée de la vidéo, quand YouTube la renseigne.
+    ///
+    /// Indispensable au choix d'une piste de sous-titres : YouTube expose des
+    /// traductions automatiques dans une centaine de langues, et seule celle-ci
+    /// désigne l'originale.
+    #[serde(default)]
+    pub language: Option<String>,
     #[serde(default)]
     pub is_live: Option<bool>,
     #[serde(default)]
@@ -66,19 +73,49 @@ impl Metadata {
         )
     }
 
-    /// Langues disposant de sous-titres manuels, puis auto-générés.
+    /// Langues disposant de sous-titres, manuels puis auto-générés.
+    ///
+    /// `dedup` ne supprime que les doublons **consécutifs** : les deux sources
+    /// étant concaténées, chaque langue présente dans les deux apparaissait
+    /// deux fois dans les messages d'erreur.
     pub fn available_subtitle_langs(&self) -> Vec<&str> {
-        let mut langs: Vec<&str> = self.subtitles.keys().map(String::as_str).collect();
-        langs.extend(self.automatic_captions.keys().map(String::as_str));
-        langs.dedup();
-        langs
+        let mut vus = std::collections::BTreeSet::new();
+        self.subtitles
+            .keys()
+            .chain(self.automatic_captions.keys())
+            .map(String::as_str)
+            .filter(|l| vus.insert(*l))
+            .collect()
+    }
+}
+
+/// Options d'accès communes à la sonde et à l'extraction — SPEC SF-09.
+///
+/// Certaines vidéos exigent une session authentifiée : limite d'âge, contenu
+/// réservé, ou vérification anti-robot. Les cookies restent **désactivés par
+/// défaut** et ne sont jamais activés automatiquement.
+#[derive(Debug, Clone, Default)]
+pub struct Access {
+    /// Navigateur dont lire les cookies (`firefox`, `chrome`, `edge`…).
+    pub cookies_from_browser: Option<String>,
+}
+
+impl Access {
+    /// Arguments à insérer dans une invocation de `yt-dlp`.
+    pub fn args(&self) -> Vec<String> {
+        match &self.cookies_from_browser {
+            Some(nav) => vec!["--cookies-from-browser".to_string(), nav.clone()],
+            None => Vec::new(),
+        }
     }
 }
 
 /// Interroge `yt-dlp -J` et désérialise le résultat.
-pub fn probe(ytdlp: &std::path::Path, url: &CanonicalUrl) -> Result<Metadata> {
+pub fn probe(ytdlp: &std::path::Path, url: &CanonicalUrl, access: &Access) -> Result<Metadata> {
     let output = Command::new(ytdlp)
-        .args(["-J", "--no-warnings", "--no-playlist", "--"])
+        .args(["-J", "--no-warnings", "--no-playlist"])
+        .args(access.args())
+        .arg("--")
         .arg(url.as_str())
         .stdin(Stdio::null())
         .output()
@@ -210,6 +247,20 @@ mod tests {
     }
 
     #[test]
+    fn n_inventorie_chaque_langue_qu_une_fois() {
+        // `fr` est présent dans les deux sources : il ne doit apparaître
+        // qu'une fois dans la liste proposée à l'utilisateur.
+        let m = parse_metadata(
+            br#"{"id":"a","subtitles":{"fr":[],"en":[]},
+                 "automatic_captions":{"fr":[],"de":[]}}"#,
+        )
+        .unwrap();
+        let mut langs = m.available_subtitle_langs();
+        langs.sort_unstable();
+        assert_eq!(langs, vec!["de", "en", "fr"]);
+    }
+
+    #[test]
     fn inventorie_les_sous_titres() {
         let m = parse_metadata(
             br#"{"id":"a","subtitles":{"fr":[{"ext":"vtt"}]},
@@ -218,5 +269,24 @@ mod tests {
         .unwrap();
         let langs = m.available_subtitle_langs();
         assert!(langs.contains(&"fr") && langs.contains(&"en"));
+    }
+}
+
+#[cfg(test)]
+mod tests_access {
+    use super::*;
+
+    #[test]
+    fn aucun_argument_sans_cookies() {
+        // Invariant SF-09 : les cookies ne sont jamais activés d'office.
+        assert!(Access::default().args().is_empty());
+    }
+
+    #[test]
+    fn les_cookies_produisent_les_arguments_attendus() {
+        let a = Access {
+            cookies_from_browser: Some("firefox".into()),
+        };
+        assert_eq!(a.args(), vec!["--cookies-from-browser", "firefox"]);
     }
 }

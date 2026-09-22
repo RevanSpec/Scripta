@@ -8,18 +8,29 @@
 //! Livré : validation d'URL, sonde de métadonnées, pipeline d'extraction audio,
 //! inférence Whisper, taxonomie d'erreurs, format `txt`.
 //!
-//! Restent au Jalon 2 : téléchargement des modèles, formats `srt`/`vtt`/`json`,
-//! cache de transcriptions, sous-titres officiels.
+//! Formats `txt`, `srt`, `vtt` et `json` livrés (tâche 2.5).
+//!
+//! Restent au Jalon 2 : téléchargement des modèles, cache de transcriptions,
+//! sous-titres officiels, cookies.
 
 pub mod audio;
+pub mod cache;
+pub mod document;
 pub mod error;
 pub mod format;
+pub mod models;
+pub mod paths;
 pub mod probe;
+pub mod sidecar;
+pub mod subtitles;
 pub mod transcribe;
 pub mod transcript;
 pub mod url;
 
+pub use document::{Document, Run, Source};
 pub use error::{Result, ScriptaError};
+pub use models::ModelSpec;
+pub use probe::Access;
 pub use transcribe::{Backend, CancelToken, Engine};
 pub use transcript::{Segment, Transcript, Word};
 pub use url::CanonicalUrl;
