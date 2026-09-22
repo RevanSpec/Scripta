@@ -90,8 +90,8 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > couverture 100,2 %, langue française correctement détectée sur 1 467
 > segments. La mesure a révélé un doublement du tampon audio, depuis corrigé.
 >
-> **Reste à confirmer :** la CI sur les trois OS — le build natif de
-> whisper.cpp n'a été éprouvé que sous Windows/MSVC.
+> **CI confirmée sur les trois OS** le 2026-09-22 : le build natif de
+> whisper.cpp fonctionne sous Linux, macOS et Windows.
 
 **Objectif :** un chemin nominal de bout en bout, sans robustesse. `URL → texte sur stdout`.
 
@@ -129,12 +129,12 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 2 — Robustesse CLI
 
-> **Statut : clos.** Les seize tâches sont livrées. 133 tests verts, `fmt` et
+> **Statut : clos.** Les seize tâches sont livrées. 131 tests verts, `fmt` et
 > `clippy -D warnings` propres, suite d'acceptation exécutée sans anomalie sur
 > une vidéo réelle de 61 min.
 >
-> **La CLI est publiable.** C'est le jalon de valeur que le plan recommandait
-> de publier avant d'entamer la GUI.
+> **La CLI est publiable**, et la CI est verte sur les trois OS. C'est le
+> jalon de valeur que le plan recommandait de publier avant d'entamer la GUI.
 
 **Objectif :** une CLI **publiable**. C'est le jalon le plus dense et le plus créateur de valeur.
 
@@ -157,7 +157,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 | ~~**2.11**~~ | ~~Sous-titres officiels~~ ✅ `--prefer-subs` avec repli silencieux, sous-commande `subs` où l'absence est une erreur, analyseur WebVTT déduplicant le défilement | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées) |
 | ~~**2.12**~~ | ~~`--cookies-from-browser`~~ ✅ transmis à la sonde et à l'extraction, désactivé par défaut | [SF-09](SPEC.md#sf-09--authentification-et-confidentialité) |
 | ~~**2.13**~~ | ~~Arborescence CLI complète~~ ✅ `run` (implicite), `subs`, `models`, `cache`, `update-extractor`, `doctor` | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
-| ~~**2.14**~~ | ~~Suite de tests~~ ✅ 133 tests. Codes de sortie figés par un `match` exhaustif — ajouter une variante sans lui attribuer de code casse la compilation, vérifié par réintroduction | [§5.5](SPEC.md#55-stratégie-de-test) |
+| ~~**2.14**~~ | ~~Suite de tests~~ ✅ 131 tests. Codes de sortie figés par un `match` exhaustif — ajouter une variante sans lui attribuer de code casse la compilation, vérifié par réintroduction | [§5.5](SPEC.md#55-stratégie-de-test) |
 | ~~**2.15**~~ | ~~Banc de performance~~ ✅ `scripts/test-long-video.ps1`, mesure de référence à 4,8 × temps réel sur 61 min | [§5.2](SPEC.md#52-performance) |
 | ~~**2.16**~~ | ~~Documentation~~ ✅ `README.md` avec avertissement CGU, `THIRD_PARTY_LICENSES.md`, `docs/VERIFICATION.md` | [§1.3](SPEC.md#13-licence-et-conformité) |
 
@@ -169,7 +169,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 - [x] `Ctrl-C` pendant l'inférence rend la main en **moins de 2 secondes**, sans processus orphelin ni fichier résiduel.
 - [x] Les seuils du [§5.2](SPEC.md#52-performance) sont mesurés et inscrits dans la spécification (ajustés si nécessaire, avec justification).
 - [x] `scripta doctor` diagnostique correctement une installation saine **et** une installation dégradée (sidecar absent, cache non inscriptible, pas de réseau).
-- [ ] CI verte sur trois OS, **toujours sans réseau**. *(Le build natif n'est éprouvé que sous Windows/MSVC ; c'est le dernier point ouvert du jalon.)*
+- [x] CI verte sur trois OS, **toujours sans réseau**. *(Confirmée le 2026-09-22 : le build natif de whisper.cpp fonctionne sous Linux, macOS et Windows.)*
 
 ### Risques
 
@@ -299,7 +299,7 @@ Aucune de ces tâches ne conditionne la v1.0.
 
 | # | Risque | Impact | Prob. | Jalon | Mitigation |
 |---|---|---|---|---|---|
-| R1 | Build `whisper-rs` + GPU sous Windows | Élevé | Élevée | J0 | Spike 0.1 en tout premier ; repli CPU |
+| R1 | Build `whisper-rs` + GPU sous Windows | Élevé | **Écartée** | J0 | Le build natif passe sur les trois OS en CI. Le GPU reste non mesuré, faute de machine de test |
 | R2 | Notarisation macOS des sidecars | Élevé | Élevée | J4 | `.dmg` de test en **début** de J4 ; certificats provisionnés dès le J3 |
 | R3 | **YouTube casse les extracteurs** | Élevé | **Certaine** *(question de quand, pas de si)* | Continu | [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) + tâche quotidienne 4.7 + [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour). **C'est la raison d'être de ces trois éléments** |
 | R4 | Vérification anti-robot bloquant les utilisateurs | Moyen | Élevée | J2 | Diagnostic explicite (code 12) + `--cookies-from-browser` documenté |

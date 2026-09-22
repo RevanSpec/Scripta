@@ -16,8 +16,8 @@ much all it is to say
 
 ## État du projet
 
-**En cours de développement.** Le cœur fonctionne de bout en bout ; l'outil
-n'est pas encore empaqueté ni distribué.
+**La CLI est fonctionnelle et éprouvée.** Elle n'est pas encore empaquetée :
+il faut compiler depuis les sources.
 
 | | État |
 |---|---|
@@ -25,16 +25,22 @@ n'est pas encore empaqueté ni distribué.
 | Transcription locale (Whisper) | ✅ |
 | Formats `txt`, `srt`, `vtt`, `json` | ✅ |
 | Horodatage au mot | ✅ |
-| Interruption propre (`Ctrl-C`) | ✅ |
-| Téléchargement des modèles, vérifié SHA-256 | ✅ |
-| Accélération GPU | ⏳ compilable, non distribuée |
 | Sous-titres YouTube officiels | ✅ |
 | Cache de transcriptions | ✅ |
+| Téléchargement des modèles, vérifié SHA-256 | ✅ |
 | Mise à jour de l'extracteur | ✅ |
+| Interruption propre (`Ctrl-C`) | ✅ |
+| Accélération GPU | ⏳ compilable, non distribuée |
 | Application de bureau | ⏳ |
 | Binaires précompilés | ⏳ |
 
-Suivi détaillé dans [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**131 tests**, verts sur Linux, macOS et Windows. Suite d'acceptation exécutée
+sans anomalie sur une vidéo réelle de 61 minutes : 4,8 × temps réel, 1 040 Mo
+de crête, et **75 % de concordance lexicale** entre la transcription Whisper
+et les sous-titres officiels — deux chemins indépendants qui s'accordent.
+
+Détail dans [`docs/ROADMAP.md`](docs/ROADMAP.md) et
+[`docs/VERIFICATION.md`](docs/VERIFICATION.md).
 
 ---
 
