@@ -147,8 +147,26 @@ d'environ **230 Mo par heure** d'audio
 ([ADR-003](SPEC.md#adr-003--inférence-non-streamée)), auxquels s'ajoute la
 taille du modèle.
 
+### Vidéo de référence
+
+`cZwuhte5ZBI` — « Les photons ont-ils la notion du temps ? feat. Etienne
+Klein », e-penser 2.0, **60 min 57 s**.
+
+Retenue pour trois raisons : elle dépasse l'heure, elle est **en français**, ce
+qui éprouve la détection de langue hors anglais, et son jargon scientifique
+rend mesurable l'apport de `--initial-prompt`.
+
+| Grandeur | Valeur |
+|---|---|
+| Durée | 3 657 s |
+| PCM `f32` en mémoire | **223,2 Mo** (3657 × 16000 × 4) |
+| Crête attendue, modèle `base` | ≈ 400 Mo (PCM + modèle + état) |
+
+Le calcul recoupe l'estimation de 230 Mo/h de l'ADR-003 : c'est précisément
+cette prédiction que la mesure doit confirmer ou démentir.
+
 ```powershell
-$U = "<URL de la vidéo longue>"
+$U = "https://www.youtube.com/watch?v=cZwuhte5ZBI"
 $p = Start-Process -FilePath $S -ArgumentList "-m","base","-f","json","-o","out.json",$U `
                    -PassThru -NoNewWindow
 $peak = 0

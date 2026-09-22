@@ -61,11 +61,17 @@ struct RunArgs {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Format de sortie.
+    /// Format de sortie : txt, srt, vtt ou json.
     ///
-    /// Validé par clap : un format inconnu ou non encore livré est une erreur
-    /// d'usage (code 2), signalée avant tout travail réseau.
-    #[arg(short, long, default_value = "txt", value_parser = parse_format)]
+    /// Validé par clap : un format inconnu est une erreur d'usage (code 2),
+    /// signalée avant tout travail réseau.
+    #[arg(
+        short,
+        long,
+        default_value = "txt",
+        value_parser = parse_format,
+        long_help = FORMAT_LONG_HELP
+    )]
     format: OutputFormat,
 
     /// Nom du modèle, résolu dans SCRIPTA_MODELS_DIR en `ggml-<nom>.bin`.
@@ -192,6 +198,16 @@ fn format_duree(secondes: f64) -> String {
         format!("{:.0} min", secondes / 60.0)
     }
 }
+
+/// Un `value_parser` personnalisé prive clap de la liste des valeurs
+/// possibles : il ne peut pas la déduire d'une fonction. Elle est donc
+/// énumérée ici.
+const FORMAT_LONG_HELP: &str = "Format de sortie.
+
+  txt   texte continu, sans horodatage
+  srt   sous-titres SubRip
+  vtt   sous-titres WebVTT
+  json  document enrichi (horodatage au mot inclus)";
 
 fn parse_format(s: &str) -> Result<OutputFormat, String> {
     s.parse()
