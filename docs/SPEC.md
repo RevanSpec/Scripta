@@ -183,18 +183,31 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
 
 **Conséquences.**
 
-- **Empreinte mémoire : ≈ 350 Mo par heure d'audio, plus ~300 Mo fixes.** Mesuré sur une vidéo de 61 min avec le modèle `base` : **986 Mo**.
+- **Empreinte mémoire : ≈ 560 Mo par heure d'audio au pic, plus ~260 Mo fixes.** Mesuré sur une vidéo de 61 min avec le modèle `base` : **986 Mo**.
 
   | Poste | Échelle |
   |---|---|
-  | PCM `f32` | 223 Mo/h (16 000 × 4 octets) |
+  | PCM `f32` (notre tampon) | 223 Mo/h (16 000 × 4 octets) |
+  | **Copie padded de whisper.cpp** | 223 Mo/h + 1,8 Mo de padding fixe |
   | Spectrogramme mel | 112 Mo/h (80 bandes × 100 trames/s × 4 octets) |
   | Modèle | 75 Mo à 1,1 Go selon la variante |
-  | État whisper | ≈ 160 Mo, indépendant de la durée |
+  | Tampons de calcul | ≈ 115 Mo, indépendants de la durée |
 
-  > **Corrigé au Jalon 2.** La v2.0 annonçait 230 Mo/h en ne comptant que le
-  > PCM. Le spectrogramme mel, calculé intégralement en amont par whisper.cpp,
-  > ajoute la moitié de ce volume et avait été omis.
+  > **Corrigé au Jalon 2, en deux temps.** La v2.0 annonçait 230 Mo/h en ne
+  > comptant que le PCM. Deux postes majeurs manquaient :
+  >
+  > - le **spectrogramme mel**, calculé intégralement en amont ;
+  > - une **copie complète de l'audio** que `log_mel_spectrogram` alloue pour
+  >   y appliquer 30 s de padding (`samples_padded`, whisper.cpp:3194). L'audio
+  >   réside donc **deux fois** en mémoire pendant le calcul du mel.
+  >
+  > Cette copie est transitoire — libérée dès le mel calculé — mais elle
+  > survient précisément au moment du pic. Elle explique à elle seule pourquoi
+  > l'empreinte réelle vaut le double de l'estimation initiale.
+  >
+  > **Optimisation possible (v2) :** notre tampon reste vivant pendant toute
+  > l'inférence alors que whisper n'en a plus besoin après le mel. L'API
+  > `full(&[f32])` de `whisper-rs` interdit de le libérer plus tôt.
 
 - Une garde `--max-duration` (défaut 240 min) protège contre les vidéos pathologiques. À 4 h, l'empreinte approcherait 1,7 Go.
 - L'affichage progressif de la GUI est alimenté par le **callback de nouveaux segments** de whisper.cpp, pas par un découpage. whisper.cpp traite l'audio séquentiellement par fenêtres de 30 s et émet ses segments au fil de l'eau : le rendu est donc bien progressif, simplement il démarre une fois le téléchargement achevé.
@@ -606,7 +619,7 @@ OPTIONS DE `run` :
 | Métrique | Seuil |
 |---|---|
 | Empreinte RSS, 1 h d'audio, modèle `base` | < 1,1 Go (mesuré : 986 Mo) |
-| Empreinte totale | ≈ 350 Mo / h + ~300 Mo fixes ([ADR-003](#adr-003--inférence-non-streamée)) |
+| Empreinte totale au pic | ≈ 560 Mo / h + ~260 Mo fixes ([ADR-003](#adr-003--inférence-non-streamée)) |
 | Démarrage CLI (`--version`, `--help`) | < 150 ms |
 | Sonde de métadonnées (SF-01) | < 3 s en conditions nominales |
 | Écritures disque hors sortie et caches | **0 octet** (invariant « zero-disk ») |
