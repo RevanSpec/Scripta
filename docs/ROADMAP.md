@@ -183,6 +183,16 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 3 — Interface de bureau (Tauri v2)
 
+> **Statut : en cours.** Livrées — 3.1 (squelette Tauri v2 + Svelte 5 + Vite),
+> 3.2 (huit commandes IPC), 3.3 (exécution hors thread principal et événements
+> de progression), 3.4 (écran principal), 3.6 (bouton Annuler), 3.7 (options
+> avancées), 3.9 (export et presse-papiers), 3.10 (restitution des erreurs),
+> 3.11 (mise à jour de l'extracteur).
+>
+> La fenêtre s'ouvre et l'application démarre. Restent 3.5 (affichage
+> progressif des segments), 3.8 (gestion des modèles dans l'interface) et 3.12
+> (déclaration `externalBin`, qui relève de l'empaquetage).
+
 **Objectif :** GUI fonctionnelle en mode développement. Le packaging relève du [Jalon 4](#jalon-4--packaging-et-cicd).
 
 **Effort :** 8–12 jours. **Prérequis :** J2 clos (le cœur doit être stable avant d'y brancher une seconde interface).

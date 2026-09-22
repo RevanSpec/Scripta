@@ -1,3 +1,7 @@
 /target
 **/*.rs.bk
 Cargo.lock.orig
+
+# Frontend de l'application de bureau
+crates/desktop/ui/node_modules/
+crates/desktop/ui/dist/
