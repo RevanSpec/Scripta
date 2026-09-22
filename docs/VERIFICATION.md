@@ -99,8 +99,8 @@ $env:CMAKE_CXX_FLAGS_RELEASE = "/MD /O2 /Ob2 /DNDEBUG"
 ```
 
 ```powershell
-cargo build --workspace
-$S = ".\target\debug\scripta.exe"
+cargo build --release --workspace
+$S = ".\target\release\scripta.exe"
 $U = "https://youtu.be/jNQXAC9IVRw"   # « Me at the zoo », 19 s
 ```
 
