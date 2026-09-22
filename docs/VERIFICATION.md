@@ -78,20 +78,25 @@ totale est multipliée par quarante.
 
 ## 3. Formats de sortie
 
-> **⚠ Sur Windows/MSVC, employer la build de débogage.**
+> **⚠ Sur Windows/MSVC, poser ces deux variables avant de compiler.**
 >
-> Contre-intuitif, mais mesuré : `--release` embarque un whisper.cpp **non
-> optimisé** et se révèle quatre à six fois plus lente. Sur 11 s d'audio avec
-> le modèle `tiny` : **1,8 s en debug contre 7,7 à 11,2 s en release**.
+> Sans elles, `--release` embarque un whisper.cpp **non optimisé**, quatre à
+> six fois plus lent que la build de débogage. La crate `cmake` écrase
+> `CMAKE_CXX_FLAGS_<BUILD_TYPE>` alors que le générateur Visual Studio compile
+> toujours en `--config Release` : le profil release y perd son `/O2`.
+> Le `build.rs` de `whisper-rs-sys` réinjecte toute variable `CMAKE_*` en
+> define, et ces defines-là l'emportent.
 >
-> La crate `cmake` écrase `CMAKE_CXX_FLAGS_<BUILD_TYPE>`, alors que le
-> générateur Visual Studio compile toujours en `--config Release`. En profil
-> debug elle écrase `RELWITHDEBINFO` — sans effet, la config `Release`
-> conserve son `/O2 /Ob2` par défaut. En profil release elle écrase
-> précisément la config utilisée, et `/O2` disparaît.
+> Mesuré sur la vidéo de 19 s, modèle `tiny` : **1,4–1,6 s avec le
+> contournement, contre 9,3–13,6 s sans**.
 >
-> Conséquence pour l'empaquetage : **en l'état, les artefacts du Jalon 4
-> seraient distribués non optimisés.**
+> Suivi en risque R9 dans [`ROADMAP.md`](ROADMAP.md). Déjà appliqué par la CI
+> et par `scripts/test-long-video.ps1`.
+
+```powershell
+$env:CMAKE_C_FLAGS_RELEASE   = "/MD /O2 /Ob2 /DNDEBUG"
+$env:CMAKE_CXX_FLAGS_RELEASE = "/MD /O2 /Ob2 /DNDEBUG"
+```
 
 ```powershell
 cargo build --workspace
@@ -209,7 +214,7 @@ $d = Get-Content out.json -Raw | ConvertFrom-Json
 | Mémoire crête | ≈ 230 Mo/h d'audio + taille du modèle. Une croissance très supérieure signale une fuite. |
 | Code de sortie | `0` |
 | Segments | Couvrent toute la durée, sans trou ni répétition en boucle |
-| Vitesse | À comparer aux seuils du [§5.2](SPEC.md#52-performance), en gardant à l'esprit le défaut d'optimisation ci-dessus |
+| Vitesse | À comparer aux seuils du [§5.2](SPEC.md#52-performance) — **build `--release` avec le contournement R9 uniquement** |
 
 ### Hallucinations
 

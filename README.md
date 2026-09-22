@@ -95,6 +95,18 @@ La version de Rust est imposée par [`rust-toolchain.toml`](rust-toolchain.toml)
 cargo build --release
 ```
 
+> **Windows/MSVC — deux variables à poser d'abord.** Sans elles, `--release`
+> embarque un whisper.cpp non optimisé, quatre à six fois plus lent. La crate
+> `cmake` écrase `CMAKE_CXX_FLAGS_<BUILD_TYPE>` alors que le générateur Visual
+> Studio compile en `--config Release` (risque R9 de la
+> [roadmap](docs/ROADMAP.md)).
+>
+> ```powershell
+> $env:CMAKE_C_FLAGS_RELEASE   = "/MD /O2 /Ob2 /DNDEBUG"
+> $env:CMAKE_CXX_FLAGS_RELEASE = "/MD /O2 /Ob2 /DNDEBUG"
+> cargo build --release
+> ```
+
 Le binaire est dans `target/release/scripta`. Vérifiez l'installation :
 
 ```bash

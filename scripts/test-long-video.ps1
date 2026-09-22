@@ -21,15 +21,11 @@
     Répertoire des artefacts. Par défaut un sous-dossier horodaté de $env:TEMP.
 
 .PARAMETER Profile
-    `debug` (défaut) ou `release`.
+    `release` (défaut) ou `debug`.
 
-    Contre-intuitif mais mesuré : sur Windows/MSVC, la build `--release`
-    embarque un whisper.cpp NON OPTIMISÉ et se révèle quatre à six fois plus
-    lente que la build de débogage. La crate `cmake` écrase
-    CMAKE_CXX_FLAGS_<BUILD_TYPE>, or le générateur Visual Studio compile
-    toujours en --config Release : en profil debug elle écrase RELWITHDEBINFO,
-    sans effet, tandis qu'en profil release elle écrase précisément la config
-    utilisée, supprimant /O2. Le défaut est suivi dans docs/ROADMAP.md.
+    Le script applique le contournement du risque R9 : sans lui, la build
+    `--release` embarque sous MSVC un whisper.cpp non optimisé, quatre à six
+    fois plus lent que la build de débogage. Voir docs/ROADMAP.md.
 
 .EXAMPLE
     .\scripts\test-long-video.ps1
@@ -42,7 +38,7 @@
 param(
     [string] $Url = "https://www.youtube.com/watch?v=cZwuhte5ZBI",
     [string] $Model = "base",
-    [ValidateSet("debug", "release")] [string] $Profile = "debug",
+    [ValidateSet("debug", "release")] [string] $Profile = "release",
     [string] $OutDir = (Join-Path $env:TEMP ("scripta-test-" + (Get-Date -Format "yyyyMMdd-HHmmss")))
 )
 
@@ -72,16 +68,28 @@ foreach ($outil in @("cargo", "yt-dlp", "ffmpeg")) {
 # ------------------------------------------------------------------- build ---
 Section "Binaire"
 
-$Exe = Join-Path $Root "target\release\scripta.exe"
+# Contournement du risque R9 — à poser AVANT tout appel à cargo. La crate
+# `cmake` écrase CMAKE_CXX_FLAGS_<BUILD_TYPE>, or le générateur Visual Studio
+# compile toujours en --config Release : sans ces variables, le profil release
+# perd son /O2 et whisper.cpp tourne quatre à six fois plus lentement. Le
+# build.rs de whisper-rs-sys réinjecte toute variable CMAKE_* en define, et
+# ces defines-là gagnent.
+if ($env:OS -eq "Windows_NT") {
+    $env:CMAKE_C_FLAGS_RELEASE   = "/MD /O2 /Ob2 /DNDEBUG"
+    $env:CMAKE_CXX_FLAGS_RELEASE = "/MD /O2 /Ob2 /DNDEBUG"
+}
+
+$Exe = Join-Path $Root "target\$Profile\scripta.exe"
 if (-not (Test-Path $Exe)) {
-    Write-Host "  Compilation en --release (plusieurs minutes, whisper.cpp est bâti depuis ses sources)…"
-    cargo build --release --workspace
+    Write-Host "  Compilation en $Profile (plusieurs minutes, whisper.cpp est bati depuis ses sources)..."
+    if ($Profile -eq "release") { cargo build --release --workspace } else { cargo build --workspace }
     if ($LASTEXITCODE -ne 0) { throw "La compilation a échoué." }
 }
 Write-Host "  $Exe"
-# Une mesure de vitesse sur une build de débogage n'a aucun sens : elle est
-# cinq à dix fois plus lente.
-Write-Host "  (build --release : les mesures de débit sont comparables au SPEC §5.2)"
+if ($Profile -eq "debug") {
+    Write-Host "  (profil debug : les mesures de debit ne sont pas comparables au SPEC 5.2)" -ForegroundColor Yellow
+}
+
 
 # ------------------------------------------------------------------ modèle ---
 Section "Modèle"
