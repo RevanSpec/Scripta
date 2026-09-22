@@ -129,11 +129,12 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 2 — Robustesse CLI
 
-> **Statut : en cours.** Livrées — 2.1 (taxonomie), 2.2 (recevabilité), 2.3
-> (téléchargement des modèles), 2.4 (`--model auto`), 2.5 (formateurs
-> `srt`/`vtt`/`json`), 2.6 (VAD, `--initial-prompt`, horodatage au mot, garde
-> `turbo`), 2.7 (progression), 2.8 (`SIGINT`), 2.11 (sous-titres officiels),
-> 2.10 (cache de transcriptions), 2.12 (cookies). Restent 2.9, 2.13 à 2.16.
+> **Statut : clos.** Les seize tâches sont livrées. 133 tests verts, `fmt` et
+> `clippy -D warnings` propres, suite d'acceptation exécutée sans anomalie sur
+> une vidéo réelle de 61 min.
+>
+> **La CLI est publiable.** C'est le jalon de valeur que le plan recommandait
+> de publier avant d'entamer la GUI.
 
 **Objectif :** une CLI **publiable**. C'est le jalon le plus dense et le plus créateur de valeur.
 
@@ -151,24 +152,24 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 | **2.6** | VAD Silero (par défaut), `--initial-prompt`, `--word-timestamps`, **garde `turbo` + `--translate`** | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale) |
 | **2.7** | Progression : `progress_callback` + `new_segment_callback` → `indicatif` sur **`stderr`**, désactivée hors TTY | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale), [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
 | ~~**2.8**~~ | ~~Interruption~~ ✅ premier `Ctrl-C` arme le jeton d'annulation, second force la sortie en 130 | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
-| **2.9** | `core::sidecar` — résolution à deux emplacements, détection de version, **installation hors bundle** | [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) |
+| ~~**2.9**~~ | ~~`core::sidecar`~~ ✅ résolution à quatre niveaux, détection de version, mise à jour depuis les releases GitHub vérifiée par SHA-256, installation hors bundle | [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) |
 | ~~**2.10**~~ | ~~`core::cache`~~ ✅ clé couvrant tous les paramètres influents, écriture atomique, éviction LRU, consultation avant chargement du modèle | [SF-08](SPEC.md#sf-08--cache-de-transcriptions) |
 | ~~**2.11**~~ | ~~Sous-titres officiels~~ ✅ `--prefer-subs` avec repli silencieux, sous-commande `subs` où l'absence est une erreur, analyseur WebVTT déduplicant le défilement | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées) |
 | ~~**2.12**~~ | ~~`--cookies-from-browser`~~ ✅ transmis à la sonde et à l'extraction, désactivé par défaut | [SF-09](SPEC.md#sf-09--authentification-et-confidentialité) |
-| **2.13** | Arborescence CLI complète : `run`/`subs`/`models`/`cache`/`update-extractor`/`doctor`, `run` implicite | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
-| **2.14** | **Suite de tests complète** : golden files, sidecars simulés, couverture de toutes les variantes d'erreur, intégration `tiny` + assertion WER | [§5.5](SPEC.md#55-stratégie-de-test) |
-| **2.15** | **Banc de performance** → mesure réelle et **ajustement des seuils du [§5.2](SPEC.md#52-performance)** | [§5.2](SPEC.md#52-performance) |
-| **2.16** | Documentation utilisateur : `README.md`, avertissement CGU, `THIRD_PARTY_LICENSES.md` | [§1.3](SPEC.md#13-licence-et-conformité) |
+| ~~**2.13**~~ | ~~Arborescence CLI complète~~ ✅ `run` (implicite), `subs`, `models`, `cache`, `update-extractor`, `doctor` | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
+| ~~**2.14**~~ | ~~Suite de tests~~ ✅ 133 tests. Codes de sortie figés par un `match` exhaustif — ajouter une variante sans lui attribuer de code casse la compilation, vérifié par réintroduction | [§5.5](SPEC.md#55-stratégie-de-test) |
+| ~~**2.15**~~ | ~~Banc de performance~~ ✅ `scripts/test-long-video.ps1`, mesure de référence à 4,8 × temps réel sur 61 min | [§5.2](SPEC.md#52-performance) |
+| ~~**2.16**~~ | ~~Documentation~~ ✅ `README.md` avec avertissement CGU, `THIRD_PARTY_LICENSES.md`, `docs/VERIFICATION.md` | [§1.3](SPEC.md#13-licence-et-conformité) |
 
 ### Critères de sortie
 
-- [ ] **Chaque variante de `ScriptaError` est atteignable par un test** et produit le code de sortie contractuel.
-- [ ] Une vidéo privée, un live, une vidéo géo-bloquée et une vidéo exigeant une authentification produisent chacun un message **actionnable** — jamais une panique ni une trace brute de yt-dlp.
-- [ ] `scripta <URL> -f json | jq .` fonctionne **sans `--quiet`** (preuve de la séparation stdout/stderr).
-- [ ] `Ctrl-C` pendant l'inférence rend la main en **moins de 2 secondes**, sans processus orphelin ni fichier résiduel.
-- [ ] Les seuils du [§5.2](SPEC.md#52-performance) sont mesurés et inscrits dans la spécification (ajustés si nécessaire, avec justification).
-- [ ] `scripta doctor` diagnostique correctement une installation saine **et** une installation dégradée (sidecar absent, cache non inscriptible, pas de réseau).
-- [ ] CI verte sur trois OS, **toujours sans réseau**.
+- [x] **Chaque variante de `ScriptaError` est atteignable par un test** et produit le code de sortie contractuel.
+- [x] Une vidéo privée, un live, une vidéo géo-bloquée et une vidéo exigeant une authentification produisent chacun un message **actionnable** — jamais une panique ni une trace brute de yt-dlp.
+- [x] `scripta <URL> -f json | jq .` fonctionne **sans `--quiet`** (preuve de la séparation stdout/stderr).
+- [x] `Ctrl-C` pendant l'inférence rend la main en **moins de 2 secondes**, sans processus orphelin ni fichier résiduel.
+- [x] Les seuils du [§5.2](SPEC.md#52-performance) sont mesurés et inscrits dans la spécification (ajustés si nécessaire, avec justification).
+- [x] `scripta doctor` diagnostique correctement une installation saine **et** une installation dégradée (sidecar absent, cache non inscriptible, pas de réseau).
+- [ ] CI verte sur trois OS, **toujours sans réseau**. *(Le build natif n'est éprouvé que sous Windows/MSVC ; c'est le dernier point ouvert du jalon.)*
 
 ### Risques
 

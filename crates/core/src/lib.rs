@@ -21,6 +21,7 @@ pub mod format;
 pub mod models;
 pub mod paths;
 pub mod probe;
+pub mod sidecar;
 pub mod subtitles;
 pub mod transcribe;
 pub mod transcript;

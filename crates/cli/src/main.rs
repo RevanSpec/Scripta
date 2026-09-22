@@ -18,7 +18,7 @@ use scripta_core::audio::{self, Sidecars};
 use scripta_core::format::{OutputFormat, SubtitleOptions};
 use scripta_core::{
     CancelToken, Document, Engine, ModelSpec, Run, ScriptaError, Source, cache, models, probe,
-    subtitles, transcribe, url,
+    sidecar, subtitles, transcribe, url,
 };
 
 #[derive(Parser)]
@@ -68,6 +68,11 @@ enum Command {
         #[command(subcommand)]
         action: CacheAction,
     },
+    /// Met à jour le binaire yt-dlp.
+    ///
+    /// L'installation se fait dans un répertoire utilisateur : remplacer un
+    /// binaire dans un bundle signé en invaliderait la signature.
+    UpdateExtractor,
     /// Diagnostic : sidecars, backends, modèles, chemins.
     Doctor,
 }
@@ -177,13 +182,16 @@ struct RunArgs {
     #[arg(long, default_value_t = 240)]
     max_duration: u64,
 
-    /// Chemin du binaire yt-dlp.
-    #[arg(long, default_value = "yt-dlp")]
-    ytdlp_path: PathBuf,
+    /// Chemin explicite du binaire yt-dlp.
+    ///
+    /// Sans lui, la résolution suit ADR-004 : copie utilisateur mise à jour,
+    /// puis copie embarquée, puis PATH.
+    #[arg(long)]
+    ytdlp_path: Option<PathBuf>,
 
-    /// Chemin du binaire ffmpeg.
-    #[arg(long, default_value = "ffmpeg")]
-    ffmpeg_path: PathBuf,
+    /// Chemin explicite du binaire ffmpeg.
+    #[arg(long)]
+    ffmpeg_path: Option<PathBuf>,
 
     /// Ignore le cache de transcriptions, en lecture comme en écriture.
     #[arg(long)]
@@ -199,6 +207,7 @@ fn main() -> ExitCode {
 
     let result = match (cli.command, cli.url) {
         (Some(Command::Doctor), _) => doctor(),
+        (Some(Command::UpdateExtractor), _) => update_extractor(),
         (Some(Command::Models { action }), _) => models_cmd(&action),
         (Some(Command::Cache { action }), _) => cache_cmd(&action),
         (Some(Command::Subs { url, args }), _) => subs(&url, &args),
@@ -277,6 +286,18 @@ const FORMAT_LONG_HELP: &str = "Format de sortie.
 
 fn parse_format(s: &str) -> Result<OutputFormat, String> {
     s.parse()
+}
+
+/// Résout les deux sidecars selon ADR-004.
+fn sidecars_of(args: &RunArgs) -> Sidecars {
+    Sidecars::new(
+        sidecar::resolve(sidecar::Kind::YtDlp, args.ytdlp_path.as_deref()).path,
+        sidecar::resolve(sidecar::Kind::Ffmpeg, args.ffmpeg_path.as_deref()).path,
+    )
+}
+
+fn ytdlp_of(args: &RunArgs) -> PathBuf {
+    sidecar::resolve(sidecar::Kind::YtDlp, args.ytdlp_path.as_deref()).path
 }
 
 fn access_of(args: &RunArgs) -> scripta_core::Access {
@@ -398,7 +419,7 @@ fn subs(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
     let url = url::parse(raw_url)?;
     let access = access_of(args);
 
-    let meta = probe::probe(&args.ytdlp_path, &url, &access)?;
+    let meta = probe::probe(&ytdlp_of(args), &url, &access)?;
     probe::check_admissible(&meta, args.max_duration)?;
 
     let piste = subtitles::best_track(&meta, args.lang.as_deref()).ok_or_else(|| {
@@ -469,7 +490,7 @@ fn run(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
     };
 
     progress("Sonde des métadonnées…");
-    let meta = probe::probe(&args.ytdlp_path, &url, &access)?;
+    let meta = probe::probe(&ytdlp_of(args), &url, &access)?;
     probe::check_admissible(&meta, args.max_duration)?;
 
     if !args.quiet {
@@ -499,12 +520,7 @@ fn run(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
     };
 
     progress("Extraction audio…");
-    let samples = audio::extract(
-        &Sidecars::new(&args.ytdlp_path, &args.ffmpeg_path),
-        &url,
-        meta.duration,
-        &access,
-    )?;
+    let samples = audio::extract(&sidecars_of(args), &url, meta.duration, &access)?;
     progress(&format!(
         "{} échantillons extraits ({:.1} s à {} Hz).",
         samples.len(),
@@ -769,25 +785,66 @@ fn write_output(path: Option<&std::path::Path>, content: &str) -> scripta_core::
     }
 }
 
-fn doctor() -> scripta_core::Result<()> {
-    println!("Scripta {} — diagnostic\n", env!("CARGO_PKG_VERSION"));
+fn update_extractor() -> scripta_core::Result<()> {
+    let avant = sidecar::resolve(sidecar::Kind::YtDlp, None);
+    let version_avant = sidecar::version_of(&avant.path, sidecar::Kind::YtDlp);
 
-    for (nom, defaut) in [("yt-dlp", "yt-dlp"), ("ffmpeg", "ffmpeg")] {
-        let trouve = std::process::Command::new(defaut)
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok();
-        println!(
-            "  {:<10} {}",
-            nom,
-            if trouve {
-                "présent"
-            } else {
-                "ABSENT (--ytdlp-path / --ffmpeg-path pour un chemin explicite)"
-            }
-        );
+    eprintln!(
+        "Version actuelle : {} ({})",
+        version_avant.as_deref().unwrap_or("inconnue"),
+        avant.origin.as_str()
+    );
+
+    let mut annonce = false;
+    let mut dernier = u64::MAX;
+    let chemin = sidecar::update_ytdlp(&mut |recus: u64, total: u64| {
+        if total == 0 {
+            return;
+        }
+        if !annonce {
+            eprintln!("Téléchargement de la dernière version…");
+            annonce = true;
+        }
+        let pourcent = recus * 100 / total;
+        if pourcent != dernier {
+            dernier = pourcent;
+            eprint!("\r  {pourcent:>3} %");
+        }
+    })?;
+    eprintln!(
+        "\r
+  Vérification de l'empreinte… conforme."
+    );
+
+    let apres = sidecar::version_of(&chemin, sidecar::Kind::YtDlp);
+    eprintln!(
+        "Installé : {} → {}",
+        chemin.display(),
+        apres.as_deref().unwrap_or("version inconnue")
+    );
+
+    if version_avant.is_some() && version_avant == apres {
+        eprintln!("Déjà à jour.");
+    }
+    Ok(())
+}
+
+fn doctor() -> scripta_core::Result<()> {
+    println!(
+        "Scripta {} — diagnostic\r
+",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    for kind in [sidecar::Kind::YtDlp, sidecar::Kind::Ffmpeg] {
+        let r = sidecar::resolve(kind, None);
+        match sidecar::version_of(&r.path, kind) {
+            Some(v) => println!("  {:<10} {v}  ({})", kind.name(), r.origin.as_str()),
+            None => println!(
+                "  {:<10} ABSENT — voir README.md, section Installation",
+                kind.name()
+            ),
+        }
     }
 
     println!(
@@ -796,12 +853,30 @@ fn doctor() -> scripta_core::Result<()> {
         scripta_core::Backend::compiled().as_str()
     );
 
-    match std::env::var_os("SCRIPTA_MODELS_DIR") {
-        Some(d) => println!("  {:<10} {}", "modèles", PathBuf::from(d).display()),
-        None => println!(
-            "  {:<10} SCRIPTA_MODELS_DIR non défini (téléchargement automatique : Jalon 2)",
-            "modèles"
-        ),
+    println!(
+        "
+Chemins"
+    );
+    for (nom, chemin) in [
+        ("modèles", models::models_dir()),
+        ("cache", cache::cache_dir()),
+        ("binaires", sidecar::bin_dir()),
+    ] {
+        match chemin {
+            Ok(p) => println!("  {:<10} {}", nom, p.display()),
+            Err(e) => println!("  {:<10} indisponible ({e})", nom),
+        }
     }
+
+    let installes = models::installed()?
+        .iter()
+        .filter(|(_, present)| *present)
+        .count();
+    println!(
+        "
+  {installes} modèle(s) installé(s), {} transcription(s) en cache.",
+        cache::list()?.len()
+    );
+
     Ok(())
 }

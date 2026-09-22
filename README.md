@@ -29,6 +29,8 @@ n'est pas encore empaqueté ni distribué.
 | Téléchargement des modèles, vérifié SHA-256 | ✅ |
 | Accélération GPU | ⏳ compilable, non distribuée |
 | Sous-titres YouTube officiels | ✅ |
+| Cache de transcriptions | ✅ |
+| Mise à jour de l'extracteur | ✅ |
 | Application de bureau | ⏳ |
 | Binaires précompilés | ⏳ |
 
@@ -165,6 +167,22 @@ scripta --no-cache "<URL>"   # ignore le cache dans les deux sens
 ```
 
 Éviction LRU au-delà de 2 Go.
+
+### Mise à jour de l'extracteur
+
+YouTube modifie fréquemment ses mécanismes d'extraction : un `yt-dlp` figé
+devient inopérant en quelques semaines. Sa mise à jour n'est donc pas un
+confort mais une condition de fonctionnement.
+
+```bash
+scripta update-extractor
+```
+
+Le binaire est téléchargé depuis les *releases* de yt-dlp, vérifié par
+SHA-256, et installé dans un **répertoire utilisateur** — jamais dans le
+bundle applicatif. Y écrire invaliderait sa signature, et sur Apple Silicon
+l'application ne se lancerait plus (ADR-004). `scripta doctor` indique la
+provenance du binaire retenu : `mis à jour`, `embarqué` ou `système`.
 
 | Modèle | Taille | Remarque |
 |---|---|---|

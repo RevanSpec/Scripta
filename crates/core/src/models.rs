@@ -186,34 +186,49 @@ pub fn ensure(spec: &ModelSpec, progress: ProgressFn<'_>) -> Result<PathBuf> {
         detail: format!("création de {} : {e}", dossier.display()),
     })?;
 
+    download_verified(&spec.url(), &destination, spec.sha256, progress)?;
+    Ok(destination)
+}
+
+/// Télécharge un fichier, vérifie son empreinte, puis l'installe atomiquement.
+///
+/// Mutualisé avec la mise à jour des sidecars (SF-06) : les deux ont les mêmes
+/// exigences — reprise, vérification, et surtout l'impossibilité de laisser en
+/// place un fichier tronqué qui serait ensuite tenu pour valide.
+pub fn download_verified(
+    url: &str,
+    destination: &Path,
+    sha256: &str,
+    progress: ProgressFn<'_>,
+) -> Result<()> {
     let partiel = destination.with_extension("part");
-    telecharger(spec, &partiel, progress)?;
+    telecharger(url, &partiel, progress)?;
 
     let empreinte = hash_file(&partiel)?;
-    if empreinte != spec.sha256 {
+    if empreinte != sha256 {
         let _ = fs::remove_file(&partiel);
         return Err(ScriptaError::ModelUnavailable {
             detail: format!(
-                "empreinte invalide pour {} : attendu {}, obtenu {empreinte}",
-                spec.file, spec.sha256
+                "empreinte invalide pour {} : attendu {sha256}, obtenu {empreinte}",
+                destination.display()
             ),
         });
     }
 
     // Renommage atomique : un Ctrl-C pendant le transfert ne laisse jamais un
-    // modèle tronqué qui serait ensuite tenu pour valide.
-    fs::rename(&partiel, &destination).map_err(|e| ScriptaError::ModelUnavailable {
+    // fichier tronqué qui serait ensuite tenu pour valide.
+    fs::rename(&partiel, destination).map_err(|e| ScriptaError::ModelUnavailable {
         detail: format!("installation de {} : {e}", destination.display()),
     })?;
 
-    Ok(destination)
+    Ok(())
 }
 
-fn telecharger(spec: &ModelSpec, partiel: &Path, progress: ProgressFn<'_>) -> Result<()> {
-    // Reprise : un `.part` plus court que la cible provient d'un transfert
-    // interrompu. Sur un modèle d'un gigaoctet, tout reprendre serait coûteux.
+fn telecharger(url: &str, partiel: &Path, progress: ProgressFn<'_>) -> Result<()> {
+    // Reprise : un `.part` déjà présent provient d'un transfert interrompu.
+    // Sur un fichier d'un gigaoctet, tout reprendre serait coûteux.
     let deja = fs::metadata(partiel).map(|m| m.len()).unwrap_or(0);
-    let reprise = deja > 0 && deja < spec.size;
+    let reprise = deja > 0;
 
     let agent = ureq::Agent::config_builder()
         .timeout_connect(Some(std::time::Duration::from_secs(CONNECT_TIMEOUT_S)))
@@ -221,13 +236,13 @@ fn telecharger(spec: &ModelSpec, partiel: &Path, progress: ProgressFn<'_>) -> Re
         .build()
         .new_agent();
 
-    let mut requete = agent.get(&spec.url());
+    let mut requete = agent.get(url);
     if reprise {
         requete = requete.header("Range", &format!("bytes={deja}-"));
     }
 
     let reponse = requete.call().map_err(|e| ScriptaError::ModelUnavailable {
-        detail: format!("téléchargement de {} : {e}", spec.file),
+        detail: format!("téléchargement de {url} : {e}"),
     })?;
 
     // 206 confirme que le serveur honore la reprise ; 200 signifie qu'il
@@ -244,10 +259,18 @@ fn telecharger(spec: &ModelSpec, partiel: &Path, progress: ProgressFn<'_>) -> Re
         File::create(partiel).map_err(|e| io_err(partiel, e))?
     };
 
+    let total = reponse
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|n| n + deja)
+        .unwrap_or(0);
+
     let mut corps = reponse.into_body().into_reader();
     let mut tampon = vec![0u8; 256 * 1024];
 
-    progress(deja, spec.size);
+    progress(deja, total);
     loop {
         let n = corps.read(&mut tampon).map_err(|e| io_err(partiel, e))?;
         if n == 0 {
@@ -257,7 +280,7 @@ fn telecharger(spec: &ModelSpec, partiel: &Path, progress: ProgressFn<'_>) -> Re
             .write_all(&tampon[..n])
             .map_err(|e| io_err(partiel, e))?;
         deja += n as u64;
-        progress(deja, spec.size);
+        progress(deja, total);
     }
     fichier.flush().map_err(|e| io_err(partiel, e))?;
 
