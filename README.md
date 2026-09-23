@@ -266,7 +266,7 @@ ponctuation) et traduction automatique (deux passages machine cumulés).
 | `-o, --output <CHEMIN>` | fichier de sortie ; `stdout` par défaut |
 | `-l, --lang <CODE>` | langue imposée ; détection automatique sinon |
 | `--translate` | traduction vers l'anglais |
-| `--initial-prompt <TEXTE>` | contexte pour les noms propres et le jargon |
+| `--initial-prompt <TEXTE>` | contexte pour les noms propres et le jargon ; n'agit que sur les premières minutes ([SF-04](docs/SPEC.md#sf-04--moteur-de-transcription-locale)) |
 | `--word-timestamps` | horodatage au mot (d'office avec `-f json`) |
 | `--no-vad` | désactive la détection d'activité vocale, active par défaut |
 | `--vad-model <CHEMIN>` | modèle VAD hors cache |
@@ -301,6 +301,11 @@ peu denses. Les horodatages restent ceux de la vidéo, au mot près.
 
 Sur un contenu chanté ou très musical, le VAD peut écarter des passages utiles :
 `--no-vad` le désactive.
+
+En mode VAD, aucune fenêtre de 30 s n'est conditionnée sur le texte des
+précédentes : une boucle de répétition, où Whisper redit la même phrase, ne peut
+donc pas s'étendre au-delà d'une fenêtre (risque R11 de la
+[roadmap](docs/ROADMAP.md)).
 
 Les codes de sortie sont contractuels
 ([SF-07](docs/SPEC.md#sf-07--taxonomie-derreurs-et-codes-de-sortie)) :

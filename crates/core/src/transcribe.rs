@@ -366,6 +366,26 @@ impl Engine {
         if let Some(prompt) = &options.initial_prompt {
             params.set_initial_prompt(prompt);
         }
+
+        // Avec le VAD, aucune fenêtre n'est conditionnée sur le texte des
+        // précédentes — risque R11. Sur la vidéo de référence, ce contexte
+        // glissant a entretenu une boucle de 71 segments, soit 155 s de parole
+        // perdues. Sans lui, une boucle ne survit pas à sa fenêtre de 30 s ; la
+        // concordance avec les sous-titres y passe de 73 à 75 %, et le débit de
+        // 6,9 à 8,0 × temps réel.
+        //
+        // Exception : `--initial-prompt`. whisper.cpp le fait passer par le même
+        // canal, que `n_max_text_ctx = 0` couperait tout entier, et whisper-rs
+        // 0.16 n'expose pas `carry_initial_prompt`, qui permettrait de garder
+        // l'invite seule. Le comportement de référence est alors conservé
+        // plutôt que d'ignorer l'invite en silence.
+        let invite = options
+            .initial_prompt
+            .as_deref()
+            .is_some_and(|p| !p.trim().is_empty());
+        if options.vad_model.is_some() && !invite {
+            params.set_n_max_text_ctx(0);
+        }
         if let Some(seuil) = options.no_speech_thold {
             params.set_no_speech_thold(seuil);
         }
