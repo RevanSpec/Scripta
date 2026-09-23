@@ -1,0 +1,183 @@
+name: Release
+
+# Un tag `v*` construit la CLI sur les trois OS et prépare un **brouillon** de
+# release : la publication reste un geste humain, après relecture des notes et
+# des artefacts. Sans tag — PR qui modifie ce workflow, lancement manuel —, tout
+# est construit, contrôlé et empaqueté, mais rien n'est publié : c'est la
+# répétition générale.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "about.toml"
+      - "about.hbs"
+      - "docs/releases/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          # 22.04 plutôt que latest : un binaire Linux exige au plus la glibc
+          # de sa machine de build. Construit ici, il n'en demande que la 2.34
+          # (relevée à chaque build), contre jusqu'à 2.39 sous la 24.04.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prérequis natifs (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
+
+      # Risque R9 (docs/ROADMAP.md) : sans ces variables, --release embarque
+      # sous MSVC un whisper.cpp non optimisé, quatre à six fois plus lent.
+      # C'est ici plus que partout ailleurs qu'il ne faut pas l'oublier.
+      #
+      # Runtime C **statique**, en plus : l'« .exe autonome » du §5.4 ne doit
+      # pas exiger le redistribuable Visual C++ (msvcp140.dll, vcruntime140.dll),
+      # absent d'une installation neuve de Windows. /MT côté whisper.cpp et
+      # +crt-static côté Rust vont ensemble : un mélange ne se lierait pas.
+      # Mesuré : même transcription, débit égal ou supérieur.
+      - name: Optimisation MSVC (R9) et runtime statique
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "CMAKE_C_FLAGS_RELEASE=/MT /O2 /Ob2 /DNDEBUG"   | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAKE_CXX_FLAGS_RELEASE=/MT /O2 /Ob2 /DNDEBUG" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "RUSTFLAGS=-C target-feature=+crt-static"      | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      # bindgen ne trouve pas toujours libclang seul sous Windows.
+      - name: LIBCLANG_PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = "C:\Program Files\LLVM\bin"
+          if (Test-Path "$p\libclang.dll") {
+            "LIBCLANG_PATH=$p" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      # SPEC §5.3 : macOS 11 au minimum. Sans cette variable, whisper.cpp
+      # viserait la version du runner et exclurait les systèmes plus anciens.
+      - name: Cible macOS
+        if: runner.os == 'macOS'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
+
+      - name: Toolchain
+        run: rustup show
+
+      # Pas de cache : un artefact publié se construit depuis zéro, sans rien
+      # hériter d'une build précédente.
+      - name: Compilation
+        run: cargo build --release --locked -p scripta-cli
+
+      - name: Contrôles du binaire
+        id: binaire
+        shell: bash
+        run: |
+          exe=target/release/scripta
+          [ "$RUNNER_OS" = Windows ] && exe="$exe.exe"
+          "$exe" --help > /dev/null
+          version=$("$exe" --version | awk '{print $2}')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+          echo "Version compilée : $version"
+          # Un tag qui ne correspond pas à la version compilée publierait un
+          # binaire mal étiqueté.
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF#refs/tags/v}" != "$version" ]]; then
+            echo "::error::Le tag ${GITHUB_REF#refs/tags/} ne correspond pas à la version compilée ($version)."
+            exit 1
+          fi
+          # Exigences réelles du binaire, relevées plutôt que supposées : elles
+          # vont dans les notes de version.
+          case "$RUNNER_OS" in
+            Linux) echo "glibc requise : $(objdump -T "$exe" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)" ;;
+            macOS) echo "macOS minimal : $(otool -l "$exe" | awk '/minos/ {print $2; exit}')" ;;
+            Windows)
+              dll=$("/c/Program Files/LLVM/bin/llvm-objdump.exe" -p "$exe" | grep "DLL Name" | sed 's/.*DLL Name: //')
+              echo "DLL importées : $(echo $dll)"
+              if echo "$dll" | grep -qiE '^(msvcp|vcruntime)'; then
+                echo "::error::Le binaire exige le redistribuable Visual C++ : runtime statique non appliqué."
+                exit 1
+              fi ;;
+          esac
+
+      - name: Outil d'inventaire des licences
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      - name: Licences des dépendances
+        run: cargo about generate --locked --target ${{ matrix.target }} -o LICENCES-DEPENDANCES.md about.hbs
+
+      - name: Empaquetage
+        shell: bash
+        run: |
+          nom="scripta-${{ steps.binaire.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "dist/$nom"
+          cp "${{ steps.binaire.outputs.exe }}" README.md LICENSE THIRD_PARTY_LICENSES.md LICENCES-DEPENDANCES.md "dist/$nom/"
+          cd dist
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a -tzip "$nom.zip" "$nom" > /dev/null
+          else
+            tar czf "$nom.tar.gz" "$nom"
+          fi
+          rm -r "$nom"
+          ls -l
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scripta-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Brouillon de release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    # Seul job à pouvoir écrire, et il n'emploie que des actions officielles.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Sommes de contrôle
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Brouillon
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          notes="docs/releases/$TAG.md"
+          if [ ! -f "$notes" ]; then
+            echo "::error::Notes de version absentes : $notes"
+            exit 1
+          fi
+          gh release create "$TAG" dist/* --draft --verify-tag \
+            --title "Scripta $TAG" --notes-file "$notes"

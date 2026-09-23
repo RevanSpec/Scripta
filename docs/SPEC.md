@@ -734,6 +734,13 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 | Windows | `x86_64-pc-windows-msvc` | Windows 10 1809 |
 | macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | macOS 11 |
 
+> **Écart de la v0.1.0.** La CLI est construite sur les runners standard :
+> sous Linux, elle exige la glibc 2.34 — relevée sur le binaire construit sous
+> Ubuntu 22.04 —, et non la 2.31 visée ; sous macOS, seul Apple Silicon est
+> fourni, sans binaire universel ; sous Windows, l'exécutable est autonome,
+> runtime C lié statiquement. Une build en conteneur et `lipo` les résorberont au
+> [Jalon 4](ROADMAP.md#jalon-4--packaging-et-cicd).
+
 ### 5.4 Distribution et packaging
 
 | Plateforme | CLI | GUI |
@@ -746,6 +753,7 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 - **Build FFmpeg minimal** : seuls les décodeurs (`opus`, `vorbis`, `aac`, `mp3`), démultiplexeurs (`matroska`, `mov`, `mp3`) et le rééchantillonneur sont nécessaires. Une build ciblée descend autour de 10–15 Mo, contre 60–70 Mo pour une build complète.
 - Sur macOS, **tous** les binaires du bundle — application et sidecars — doivent être signés et notarisés ensemble, avec les droits d'exécution appropriés.
 - Chaque release publie un fichier de sommes de contrôle et la liste des versions de sidecars embarquées.
+- *(v0.1.0.)* Les archives de la CLI n'embarquent aucun sidecar. Elles joignent `LICENSE`, `THIRD_PARTY_LICENSES.md` et l'inventaire des licences des bibliothèques compilées (`LICENCES-DEPENDANCES.md`, généré par `cargo about` ; `about.toml` fixe les licences acceptées). Un tag produit un **brouillon** de release, publié à la main après relecture.
 
 ### 5.5 Stratégie de test
 

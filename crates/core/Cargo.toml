@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# Distribué en binaire, jamais sur crates.io : aucune publication accidentelle.
+publish = false
 
 [dependencies]
 url.workspace = true
