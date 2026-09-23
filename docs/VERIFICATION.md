@@ -25,9 +25,33 @@ seul au premier appel, il n'y a rien à faire.
 scripta doctor   # ou : cargo run -- doctor
 ```
 
-Les quatre lignes doivent être renseignées. `inférence` indique le backend
-compilé — `cpu` en l'absence de feature, conformément à
-[ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle).
+Attendu : les deux extracteurs avec leur version, le backend compilé — `cpu`
+en l'absence de feature, conformément à
+[ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) —, trois
+répertoires `inscriptible`, trois destinations `joignable`, et pour finir
+**« Aucun problème détecté. »** Le tout en une à deux secondes.
+
+**Installations dégradées** — chacune doit être nommée, et comptée dans le
+bilan final ; `doctor` rend 0 dans tous les cas :
+
+```powershell
+# Sidecars absents
+$p = $env:Path; $env:Path = "C:\Windows\System32"; scripta doctor; $env:Path = $p
+
+# Cache non inscriptible : un fichier à la place d'un répertoire
+Set-Content "$env:TEMP\pas-un-dossier" "x"
+$env:SCRIPTA_CACHE_DIR = "$env:TEMP\pas-un-dossier\transcripts"; scripta doctor
+Remove-Item Env:SCRIPTA_CACHE_DIR
+
+# Pas de réseau : mandataire injoignable
+$env:HTTPS_PROXY = "http://127.0.0.1:9"; scripta doctor; Remove-Item Env:HTTPS_PROXY
+```
+
+| Cas | Attendu |
+|---|---|
+| Sidecars absents | `yt-dlp` et `ffmpeg` : `ABSENT`, 2 problèmes |
+| Cache non inscriptible | `cache` : `NON INSCRIPTIBLE`, avec la cause |
+| Pas de réseau | trois destinations `INJOIGNABLE`, en deux secondes environ |
 
 ---
 
@@ -40,6 +64,7 @@ préparer. Pour anticiper :
 scripta models list
 scripta models pull base
 scripta models verify base
+scripta models pull silero    # modèle VAD, actif par défaut
 ```
 
 Le cache va dans `%LOCALAPPDATA%\scripta\models` sous Windows, `~/.cache/scripta/models`
@@ -66,10 +91,30 @@ Les tests d'inférence se **sautent** sans fixtures. Pour les activer :
 
 ```powershell
 Invoke-WebRequest -Uri "https://github.com/ggml-org/whisper.cpp/raw/master/samples/jfk.wav" -OutFile "$HOME\jfk.wav"
-$env:SCRIPTA_TEST_MODEL = "$env:SCRIPTA_MODELS_DIR\ggml-tiny.bin"
+$m = scripta models path
+$env:SCRIPTA_TEST_MODEL = "$m\ggml-base.bin"
 $env:SCRIPTA_TEST_WAV   = "$HOME\jfk.wav"
-cargo test -p scripta-core --test inference -- --test-threads=1
+$env:SCRIPTA_TEST_VAD   = "$m\ggml-silero-v5.1.2.bin"   # tests du VAD
+cargo test --release -p scripta-core --test inference -- --test-threads=1
 ```
+
+Sans accès à `jfk.wav`, la synthèse vocale de Windows produit un échantillon
+équivalent — les assertions portent sur des mots, pas sur une voix :
+
+```powershell
+Add-Type -AssemblyName System.Speech
+$v = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$v.SelectVoice("Microsoft Zira Desktop")   # voix anglaise
+$f = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, 16, 1)
+$v.SetOutputToWaveFile("$HOME\jfk.wav", $f)
+$v.Speak("And so, my fellow Americans: ask not what your country can do for you. Ask what you can do for your country.")
+$v.Dispose()
+```
+
+`le_vad_conserve_la_chronologie_d_origine` est le test décisif du VAD : la
+même phrase, séparée de longs silences, doit retrouver ses vraies positions,
+mots compris. Il échoue si l'on revient au VAD intégré de whisper.cpp (risque
+R10 de la [roadmap](ROADMAP.md)).
 
 `--test-threads=1` n'est pas cosmétique : chaque test charge le modèle et lance
 une inférence multithread ; en parallèle ils se disputent le CPU et la durée
@@ -93,6 +138,9 @@ totale est multipliée par quarante.
 >
 > Suivi en risque R9 dans [`ROADMAP.md`](ROADMAP.md). Déjà appliqué par la CI
 > et par `scripts/test-long-video.ps1`.
+>
+> Depuis PowerShell ou cmd, pas depuis Git Bash : MSYS y convertit ces
+> valeurs, qui commencent par `/`, en chemins, et la compilation échoue.
 
 ```powershell
 $env:CMAKE_C_FLAGS_RELEASE   = "/MD /O2 /Ob2 /DNDEBUG"
@@ -119,6 +167,24 @@ $U = "https://youtu.be/jNQXAC9IVRw"   # « Me at the zoo », 19 s
 & $S -m base -f json $U 2>$null | ConvertFrom-Json | Select-Object -ExpandProperty transcription
 ```
 
+**Progression hors terminal** — `stderr` redirigé ne doit contenir que des
+lignes, sans retour chariot ; vers un terminal, une barre montre pourcentage,
+position et vitesse :
+
+```powershell
+cmd /c "$S --no-cache $U 2> err.txt > nul"
+[IO.File]::ReadAllText("$PWD\err.txt").Replace("`r`n", "").Contains("`r")   # False
+```
+
+**VAD** — actif par défaut. Dans le JSON, `transcription.vad` vaut `true`, et
+chaque mot tombe dans les bornes de son segment :
+
+```powershell
+$d = & $S -f json $U 2>$null | ConvertFrom-Json
+$d.transcription.vad
+$d.segments | ForEach-Object { $seg = $_; @($_.words | Where-Object { $_.start -lt $seg.start - 0.05 -or $_.end -gt $seg.end + 0.05 }).Count }   # que des 0
+```
+
 ---
 
 ## 4. Codes de sortie
@@ -135,6 +201,9 @@ commande, `$LASTEXITCODE`.
 | `30` — modèle absent | `& $S --model-path "C:\absent.bin" $U` |
 | `13` — diffusion en direct | `& $S -m base "<URL d'un live en cours>"` |
 | `14` — durée excessive | `& $S -m base --max-duration 1 $U` |
+| `50` — fichier existant, sans `--force` ; **immédiat**, avant toute transcription | `& $S -o sortie.txt $U` deux fois de suite |
+| `50` — répertoire de sortie absent, immédiat | `& $S -o inexistant\x.txt $U` |
+| `2` — `--vad-model` avec `--no-vad` | `& $S --vad-model x.bin --no-vad $U` |
 
 ---
 
@@ -145,7 +214,9 @@ commande, `$LASTEXITCODE`.
 ```
 
 - **Premier `Ctrl-C`** pendant la transcription → message d'interruption
-  demandée, puis sortie **en quelques secondes** avec le code `130`.
+  demandée, puis sortie **en quelques secondes** avec le code `130`. Idem
+  pendant le téléchargement d'un modèle ou l'extraction audio : toutes les
+  étapes honorent l'interruption.
 - **Second `Ctrl-C`** → sortie immédiate, également en `130`.
 
 Vérifier qu'aucun processus ne survit :
@@ -195,9 +266,12 @@ fond plutôt que sur la forme.
 ## 7. Mémoire et débit — détail
 
 
-Attendu : **≈ 350 Mo par heure** d'audio — 223 de PCM et 112 de spectrogramme
-mel — auxquels s'ajoutent le modèle et ~340 Mo d'état
-([ADR-003](SPEC.md#adr-003--inférence-non-streamée)).
+Attendu, sans VAD : **≈ 560 Mo par heure** d'audio — 223 de PCM, 225 de copie
+padded par whisper.cpp, 112 de spectrogramme mel —, auxquels s'ajoutent le
+modèle et ~340 Mo de tampons ggml
+([ADR-003](SPEC.md#adr-003--inférence-non-streamée)). Avec le VAD, actif par
+défaut, la copie padded et le mel ne portent que sur la parole : c'est un
+majorant.
 
 ### Vidéo de référence
 
@@ -213,7 +287,7 @@ rend mesurable l'apport de `--initial-prompt`.
 | Durée annoncée | 3 657 s |
 | PCM `f32` | 223 Mo (3657 × 16000 × 4) |
 | Spectrogramme mel | 112 Mo (80 × 365 700 × 4) |
-| Crête attendue, modèle `base` | ≈ 820 Mo |
+| Crête attendue, modèle `base` | ≈ 1 040 Mo sans VAD, moins avec |
 
 ### Mesure de référence — 2026-09-22
 
@@ -280,11 +354,40 @@ $d = Get-Content out.json -Raw | ConvertFrom-Json
 "Segments   : {0}"        -f $d.segments.Count
 ```
 
+### Mesure avec VAD — 2026-09-23
+
+Même vidéo, même modèle, VAD actif — mais une autre machine : 20 cœurs
+logiques, Windows 11.
+
+| Grandeur | Mesuré |
+|---|---|
+| Code de sortie | `0` |
+| Durée totale | 1 659 s — **faussée**, voir ci-dessous |
+| Crête mémoire | **999 Mo**, contre 1 040 sans VAD |
+| Langue détectée | `fr` |
+| Segments | 1 626 |
+| Couverture | 96,5 % — la musique de fin, écartée par le VAD, n'est plus transcrite |
+| **Concordance des deux chemins** | **73 %** |
+| Répétitions | **71 ×** « et qui est en train de se faire », de 2 240 à 2 395 s |
+
+1. **Le débit a révélé un défaut, depuis corrigé.** La détection VAD suivait
+   `--threads`, soit 20 threads ici ; sur des graphes aussi petits, la
+   synchronisation l'emporte sur le calcul : 52 s pour 10 min d'audio, contre
+   1,3 s sur un seul thread. Elle tourne désormais sur un thread. Le débit avec
+   VAD reste à remesurer.
+2. **La mémoire baisse**, comme prévu : l'audio compacté sur place réduit la
+   copie padded et le mel sans ajouter de tampon.
+3. **Une boucle de répétition est apparue** : 155 s de parole remplacées par
+   la même phrase, là où la mesure sans VAD n'en montrait aucune. Un extrait de
+   700 s autour d'elle ne la reproduit dans aucune configuration — sans VAD,
+   avec VAD, avec VAD et sans contexte glissant : elle dépend du contexte
+   accumulé depuis le début. Suivi en risque R11 de la [roadmap](ROADMAP.md).
+
 ### Ce qu'il faut regarder
 
 | Point | Attendu |
 |---|---|
-| Mémoire crête | ≈ 350 Mo/h + modèle + ~340 Mo d'état. Une croissance très supérieure signale une fuite. |
+| Mémoire crête | ≈ 560 Mo/h + modèle + ~340 Mo de tampons ggml sans VAD ; moins avec. Une croissance très supérieure signale une fuite. |
 | Code de sortie | `0` |
 | Segments | Couvrent toute la durée, sans trou ni répétition en boucle |
 | Vitesse | À comparer aux seuils du [§5.2](SPEC.md#52-performance) — **build `--release` avec le contournement R9 uniquement** |
@@ -300,8 +403,8 @@ $d.segments | Group-Object text | Where-Object Count -gt 3 | Select-Object Count
 ```
 
 C'est le défaut que le VAD Silero corrige
-([SF-04](SPEC.md#sf-04--moteur-de-transcription-locale)) ; il n'est pas encore
-activé par défaut, le modèle VAD n'étant pas téléchargé automatiquement.
+([SF-04](SPEC.md#sf-04--moteur-de-transcription-locale)), actif par défaut
+depuis le Jalon 2 ; `--no-vad` permet la comparaison.
 
 ---
 

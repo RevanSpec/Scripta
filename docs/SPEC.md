@@ -1,7 +1,7 @@
 # Scripta — Cahier des charges technique et fonctionnel
 
-**Version :** 2.1
-**Statut :** Validé pour implémentation — ADR-001 révisé au Jalon 0
+**Version :** 2.2
+**Statut :** Validé pour implémentation — ADR-001 révisé au Jalon 0, SF-04 précisé au Jalon 2
 **Révision précédente :** 1.0 (voir [Annexe C — Journal des corrections](#annexe-c--journal-des-corrections))
 
 ---
@@ -183,7 +183,7 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
 
 **Conséquences.**
 
-- **Empreinte mémoire : ≈ 560 Mo par heure d'audio au pic, plus ~260 Mo fixes.** Mesuré sur une vidéo de 61 min avec le modèle `base` : **986 Mo**.
+- **Empreinte mémoire : ≈ 560 Mo par heure d'audio au pic, plus ~260 Mo fixes.** Mesuré sur une vidéo de 61 min avec le modèle `base`, sans VAD : **1 040 Mo**.
 
   | Poste | Échelle |
   |---|---|
@@ -218,6 +218,13 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
   > d'adressage divisé par deux) mais ne réduit pas l'empreinte physique.
   > Le seul instrument fiable ici est l'allocation elle-même, vérifiée par
   > `le_tampon_audio_n_est_pas_realloue`.
+  >
+  > **Avec le VAD (Jalon 2).** L'audio est compacté **sur place**
+  > (`core::vad`) : aucun tampon n'est ajouté, et la copie padded comme le
+  > spectrogramme ne portent plus que sur la parole. Le VAD ne peut donc
+  > qu'abaisser le pic. Le VAD intégré de whisper.cpp, lui, aurait ajouté une
+  > copie de la parole au moment même du pic — l'une des raisons de l'écarter
+  > (SF-04).
 
 - Une garde `--max-duration` (défaut 240 min) protège contre les vidéos pathologiques. À 4 h, l'empreinte approcherait 1,7 Go.
 - L'affichage progressif de la GUI est alimenté par le **callback de nouveaux segments** de whisper.cpp, pas par un découpage. whisper.cpp traite l'audio séquentiellement par fenêtres de 30 s et émet ses segments au fil de l'eau : le rendu est donc bien progressif, simplement il démarre une fois le téléchargement achevé.
@@ -358,7 +365,7 @@ La même règle s'applique à la lecture de `stdout` : elle doit se faire dans u
 | macOS | `~/Library/Caches/scripta/models/` |
 | Windows | `%LOCALAPPDATA%\scripta\models\` |
 
-Surchargeable par `SCRIPTA_MODELS_DIR`. Géré par `scripta models {list,pull,rm,path}`.
+Surchargeable par `SCRIPTA_MODELS_DIR`. Géré par `scripta models {list,pull,rm,path,verify}` ; le modèle VAD s'y désigne par `silero`, mais ne s'accepte pas en `--model`, puisqu'il ne transcrit pas.
 
 ### SF-04 — Moteur de transcription locale
 
@@ -368,13 +375,46 @@ Surchargeable par `SCRIPTA_MODELS_DIR`. Géré par `scripta models {list,pull,rm
 - `--translate` : traduction vers l'anglais.
   **⚠ Incompatibilité : `--translate` est refusé avec `--model turbo`.** `large-v3-turbo` a été entraîné pour la transcription seule ; sa sortie en mode traduction est inexploitable. La CLI rejette la combinaison avec un message explicite suggérant `large-v3`.
 - `--threads` : défaut = nombre de cœurs **physiques** (`num_cpus::get_physical()`). Sans effet notable lorsqu'un backend GPU est actif.
+  > **Écart assumé (J2).** Le défaut retenu est le parallélisme disponible (`std::thread::available_parallelism`, soit les cœurs logiques) : toutes les mesures du [§5.2](#52-performance) ont été faites ainsi, et aucune mesure comparative ne justifie encore d'ajouter `num_cpus`.
 - `--word-timestamps` : horodatage au mot (`token_timestamps`), nécessaire au JSON enrichi.
 
 **VAD (détection d'activité vocale) — activé par défaut.**
 
 > **Ajout v2.** Absent de la v1. C'est le levier le plus rentable sur la qualité perçue : Whisper hallucine en boucle sur les silences prolongés, les génériques musicaux et les bruits de fond — typiquement en répétant une phrase d'abonnement ou de remerciement. Le VAD Silero de whisper.cpp élimine l'essentiel de ces artefacts et réduit au passage le temps d'inférence sur les contenus peu denses.
 
-Paramètres complémentaires exposés : `no_speech_thold`, `entropy_thold`, désactivable par `--no-vad`.
+Paramètres complémentaires exposés : `no_speech_thold`, `entropy_thold` (`--no-speech-thold`, `--entropy-thold`), désactivable par `--no-vad`. `--vad` le réactive — le dernier des deux l'emporte —, et `--vad-model <CHEMIN>` désigne un modèle hors cache.
+
+> **Précisé au Jalon 2 — VAD orchestré par Scripta.** La v2.1 supposait que
+> whisper.cpp appliquerait le VAD lui-même (`enable_vad`). Trois constats
+> l'écartent :
+>
+> 1. **La voie est inopérante via whisper-rs.** whisper.cpp 1.8.3 n'applique
+>    le VAD que dans `whisper_full`, sur l'état par défaut du contexte ;
+>    `WhisperState::full` de whisper-rs 0.16 appelle `whisper_full_with_state`,
+>    qui ignore `params.vad`. Les paramètres sont acceptés, sans effet.
+> 2. **Elle fausserait les mots.** Même par `whisper_full`, seules les bornes
+>    des segments sont replacées sur la chronologie d'origine ; celles des
+>    tokens restent dans la chronologie compactée, et chaque silence retiré
+>    décale d'autant tous les mots qui le suivent.
+> 3. **Elle recopierait l'audio** au moment du pic mémoire (ADR-003).
+>
+> Scripta détecte donc la parole avec le module Silero de whisper.cpp
+> (`WhisperVadContext`), compacte l'audio sur place en insérant 0,1 s de
+> silence entre les plages — les réglages de whisper.cpp —, et replace segments
+> **et** mots par une table de correspondance exacte. Le test
+> `le_vad_conserve_la_chronologie_d_origine` échoue si l'on revient au VAD
+> intégré : une parole placée à 5 s y ressort horodatée à 0 s.
+>
+> Sans parole détectée, la transcription est vide — ce n'est pas une erreur.
+>
+> La détection tourne sur **un seul thread**, quel que soit `--threads` :
+> chaque fenêtre de 32 ms est un graphe ggml minuscule, que la synchronisation
+> de plusieurs threads ralentit. Mesuré sur 10 min d'audio : 1,3 s avec un
+> thread, 3,4 s avec 4, 52 s avec 20.
+>
+> **Point ouvert (R11).** Sur la vidéo de référence, le VAD a coïncidé avec
+> une boucle de répétition de 155 s absente de la mesure sans VAD. Son
+> évaluation est suivie dans la [roadmap](ROADMAP.md).
 
 **`--initial-prompt`.**
 
@@ -448,6 +488,14 @@ YouTube modifie fréquemment ses mécanismes d'extraction : un `yt-dlp` embarqu�
 - Sur macOS, le binaire téléchargé reçoit une signature ad-hoc (`codesign -s -`) et l'attribut de quarantaine est retiré, faute de quoi il ne s'exécutera pas sur Apple Silicon.
 - Vérification de disponibilité au démarrage, au plus une fois par période de 24 h, sans blocage et sans télémétrie. Désactivable par `SCRIPTA_NO_UPDATE_CHECK=1`.
 
+> **Mis en œuvre au Jalon 2.** La dernière version est lue dans la redirection
+> de `github.com/yt-dlp/yt-dlp/releases/latest` : une requête `HEAD`, ni API ni
+> quota, et aucune autre destination que `github.com`. La vérification tourne
+> dans un thread détaché que la commande n'attend jamais. Une commande brève
+> pouvant se terminer avant la réponse, l'avis trouvé est mémorisé
+> (`<data_dir>/scripta/verification-yt-dlp`) et rappelé aux lancements suivants,
+> jusqu'à ce que yt-dlp soit à jour.
+
 ### SF-07 — Taxonomie d'erreurs et codes de sortie
 
 > **Ajout v2.** Entièrement absent de la v1. C'est pourtant le premier poste de contact avec la réalité d'exploitation : la majorité des échecs de ce type d'outil ne sont pas des bugs mais des conditions attendues de la plateforme, qui doivent produire un diagnostic actionnable plutôt qu'une trace de panique.
@@ -477,11 +525,25 @@ YouTube modifie fréquemment ses mécanismes d'extraction : un `yt-dlp` embarqu�
 
 **Diagnostic.** `scripta doctor` vérifie et affiche : sidecars résolus et leurs versions, backends ggml détectés, modèles en cache, chemins et droits d'écriture, connectivité vers HuggingFace et YouTube.
 
+> **Mis en œuvre au Jalon 2.** Les droits d'écriture sont éprouvés sans rien
+> créer — sur le plus proche ancêtre existant quand le répertoire n'existe pas
+> encore. Les trois destinations de SF-09 sont interrogées en parallèle, cinq
+> secondes au plus : hors ligne, le diagnostic dure deux secondes. Le backend
+> affiché est celui de la compilation (ADR-001), avec la marche à suivre pour
+> un GPU. `doctor` rend toujours 0 : c'est un rapport, dont la dernière ligne
+> dénombre les problèmes.
+
 ### SF-08 — Cache de transcriptions
 
 > **Ajout v2.** Retraiter une vidéo déjà transcrite est fréquent (changement de format d'export, réglage des sous-titres, erreur de manipulation) et coûte plusieurs minutes d'inférence pour rien.
 
-- Clé : `sha256(video_id ‖ model_id ‖ lang ‖ translate ‖ vad ‖ word_timestamps)`.
+- Clé : `sha256(video_id ‖ model_id ‖ lang ‖ translate ‖ vad ‖ word_timestamps ‖ initial_prompt ‖ no_speech_thold ‖ entropy_thold)`.
+
+  > **Corrigé au Jalon 2.** La clé omettait `--initial-prompt` : relancer une
+  > transcription avec un contexte resservait en silence celle obtenue sans.
+  > Les champs facultatifs sont étiquetés, et omis quand ils sont absents :
+  > l'empreinte des clés antérieures est inchangée, et le cache existant reste
+  > valable.
 - Contenu stocké : le JSON complet (SF-05), dont tous les autres formats se dérivent sans réinférence.
 - Emplacement : `<cache_dir>/scripta/transcripts/`.
 - Contournement par `--no-cache` ; administration par `scripta cache {list,clear,path}`.
@@ -513,7 +575,7 @@ USAGE:
 COMMANDES:
     run                  Transcrit une URL YouTube (commande par défaut)
     subs                 Récupère uniquement les sous-titres officiels
-    models               Gère le cache de modèles (list | pull | rm | path)
+    models               Gère le cache de modèles (list | pull | rm | path | verify)
     cache                Gère le cache de transcriptions (list | clear | path)
     update-extractor     Met à jour le binaire yt-dlp
     doctor               Diagnostic système (backends, sidecars, modèles)
@@ -522,13 +584,17 @@ COMMANDES:
 OPTIONS DE `run` :
     -m, --model <NAME>          Modèle [défaut: auto]
                                 [auto, tiny, base, small, medium, large-v3, turbo]
+        --model-path <PATH>     Modèle hors catalogue, prioritaire sur --model
     -l, --lang <CODE>           Langue forcée (fr, en, es, …) [défaut: auto]
         --translate             Traduit vers l'anglais (incompatible avec --model turbo)
     -f, --format <FORMAT>       Format de sortie [défaut: txt] [txt, srt, vtt, json]
     -o, --output <PATH>         Fichier de sortie [défaut: stdout]
-    -t, --threads <NUM>         Threads CPU [défaut: cœurs physiques]
-        --backend <BACKEND>     [défaut: auto] [auto, cpu, vulkan, metal, cuda]
+        --force                 Écrase le fichier de sortie s'il existe
+    -t, --threads <NUM>         Threads CPU [défaut: cœurs logiques]
         --vad / --no-vad        Détection d'activité vocale [défaut: activée]
+        --vad-model <PATH>      Modèle VAD hors cache
+        --no-speech-thold <F>   Seuil d'absence de parole [défaut whisper.cpp: 0.6]
+        --entropy-thold <F>     Seuil d'entropie [défaut whisper.cpp: 2.4]
         --initial-prompt <TXT>  Contexte (noms propres, jargon) pour guider le modèle
         --word-timestamps       Horodatage au mot (requis pour un JSON enrichi)
         --prefer-subs           Utilise les sous-titres officiels s'ils existent
@@ -537,18 +603,25 @@ OPTIONS DE `run` :
         --max-duration <MIN>    Refus au-delà de cette durée [défaut: 240]
         --cookies-from-browser <NAV>   Cookies pour les vidéos restreintes
         --no-cache              Ignore le cache de transcriptions
+        --ytdlp-path <PATH>     Binaire yt-dlp explicite (ADR-004)
+        --ffmpeg-path <PATH>    Binaire ffmpeg explicite
     -q, --quiet                 Supprime logs et progression
     -v, --verbose               Verbosité accrue (répétable)
     -h, --help                  Aide
     -V, --version               Version
 ```
 
+> **Corrigé en v2.2 — `--backend` retiré.** Le backend est lié à la
+> compilation ([ADR-001](#adr-001--stratégie-daccélération-matérielle) révisé) :
+> une option d'exécution ne pourrait rien choisir.
+
 **Contrats d'exécution :**
 
 - `stdout` ne transporte **que** le résultat ; progression, logs et avertissements vont sur `stderr`.
 - Les codes de sortie suivent la table [SF-07](#sf-07--taxonomie-derreurs-et-codes-de-sortie).
-- `SIGINT` (et `Ctrl-Break` sous Windows) : les sous-processus sont tués, l'inférence en cours est interrompue via `abort_callback`, les fichiers partiels sont supprimés, sortie en 130. Un second `SIGINT` force une terminaison immédiate.
-- La barre de progression est automatiquement désactivée si `stderr` n'est pas un terminal (CI, redirection).
+- `SIGINT` (et `Ctrl-Break` sous Windows) : les sous-processus sont tués, l'inférence en cours est interrompue via `abort_callback`, les fichiers partiels sont supprimés, sortie en 130 — **quelle que soit l'étape** : téléchargement d'un modèle (le `.part` est conservé pour la reprise), sonde, extraction, inférence. Un second `SIGINT` force une terminaison immédiate.
+- La barre de progression est automatiquement désactivée si `stderr` n'est pas un terminal (CI, redirection). Les étapes restent annoncées, en lignes simples.
+- Un fichier de sortie existant n'est jamais écrasé sans `--force`, et le refus tombe avant tout travail (§5.1).
 
 ### 4.2 Interface de bureau (Tauri v2)
 
@@ -584,7 +657,7 @@ OPTIONS DE `run` :
 - **Aucun travail bloquant sur le thread principal.** Extraction et inférence s'exécutent sur un thread dédié (`tauri::async_runtime::spawn_blocking`) ; la progression et les segments remontent par événements Tauri. Un `whisper_full` appelé directement dans une commande IPC figerait la fenêtre pendant plusieurs minutes.
 - Le bouton **Annuler** arme le drapeau lu par l'`abort_callback` et tue les sidecars ; il doit rester réactif pendant l'inférence.
 - Les sidecars sont déclarés en `externalBin` dans `tauri.conf.json`. **Rappel Tauri : les fichiers doivent porter le suffixe du triplet cible** (`yt-dlp-x86_64-pc-windows-msvc.exe`, `ffmpeg-aarch64-apple-darwin`, …), faute de quoi le bundle échoue silencieusement à embarquer le binaire.
-- L'accélération affichée provient de l'énumération des backends à l'exécution ([ADR-001](#adr-001--stratégie-daccélération-matérielle)), pas d'une constante de compilation.
+- L'accélération affichée est celle **de la compilation** (`Backend::compiled()`) : conformément à [ADR-001](#adr-001--stratégie-daccélération-matérielle) révisé, aucun artefact ne découvre un GPU à l'exécution. *(Corrigé en v2.2 : cette ligne annonçait encore l'énumération à l'exécution de la v2.0.)*
 - Les segments s'affichent au fil de leur émission ; la zone de sortie suit automatiquement, sauf si l'utilisateur a fait défiler manuellement.
 
 ---
@@ -599,7 +672,7 @@ OPTIONS DE `run` :
 - **Vérification d'intégrité SHA-256** sur tout artefact téléchargé (modèles, mises à jour de sidecars).
 - **Timeouts réseau explicites** sur toutes les requêtes ; aucune redirection suivie vers un hôte hors liste blanche.
 - **Aucune exécution de code téléchargé** autre que les sidecars vérifiés.
-- Le chemin de sortie utilisateur est vérifié avant écriture (pas d'écrasement silencieux d'un fichier existant sans `--force`).
+- Le chemin de sortie utilisateur est vérifié avant écriture (pas d'écrasement silencieux d'un fichier existant sans `--force`). *(J2 : vérification avant tout travail, puis ouverture exclusive — `create_new` — au moment d'écrire ; avec `--force`, écriture à côté puis renommage, pour ne jamais remplacer un fichier valide par un fichier tronqué.)*
 
 ### 5.2 Performance
 
@@ -630,7 +703,7 @@ OPTIONS DE `run` :
 
 | Métrique | Seuil |
 |---|---|
-| Empreinte RSS, 1 h d'audio, modèle `base` | < 1,1 Go (mesuré : 986 Mo) |
+| Empreinte RSS, 1 h d'audio, modèle `base` | < 1,1 Go (mesuré : 1 040 Mo sans VAD ; 999 Mo avec) |
 | Empreinte totale au pic | ≈ 560 Mo / h + ~260 Mo fixes ([ADR-003](#adr-003--inférence-non-streamée)) |
 | Démarrage CLI (`--version`, `--help`) | < 150 ms |
 | Sonde de métadonnées (SF-01) | < 3 s en conditions nominales |
@@ -720,6 +793,8 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 
 ## Annexe C — Journal des corrections
 
+**v2.2** — Retours du Jalon 2 : VAD orchestré par Scripta et motifs de l'écart (SF-04, ADR-003, Annexe D) ; seuils `no_speech_thold` / `entropy_thold` exposés ; clé de cache complétée (SF-08) ; `--backend` retiré et §4.2 aligné sur ADR-001 révisé ; `--force`, `--model-path`, `--vad-model`, chemins de sidecars ajoutés au §4.1 ; mises en œuvre de SF-06 et du diagnostic SF-07 décrites ; écart assumé sur `--threads` ; mesure mémoire de référence corrigée (1 040 Mo).
+
 **v2.1** — Retours du Jalon 0 : [ADR-001](#adr-001--stratégie-daccélération-matérielle) révisé (le chargement dynamique des backends ggml n'est pas exposé par `whisper-rs-sys` 0.15 ; passage à un artefact par backend), [Annexe D](#annexe-d--points-à-valider-en-implémentation) mise à jour avec l'état réel de chaque hypothèse, [Annexe E](#annexe-e--prérequis-de-compilation) ajoutée (prérequis de compilation), MSRV portée à 1.88.
 
 **v2.0** — Révision complète. 12 corrections (Annexe A) et 15 ajouts (Annexe B). Introduction de quatre ADR pour figer les décisions structurantes. Nom du binaire unifié en `scripta`.
@@ -728,15 +803,15 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 
 ## Annexe D — Points à valider en implémentation
 
-État au terme du [Jalon 0](ROADMAP.md#jalon-0--dérisquage), sur `whisper-rs` 0.16 / `whisper-rs-sys` 0.15.
+État au terme du [Jalon 0](ROADMAP.md#jalon-0--dérisquage), sur `whisper-rs` 0.16 / `whisper-rs-sys` 0.15, complété au Jalon 2.
 
 | Hypothèse | État | Constat |
 |---|---|---|
 | `whisper-rs` expose `abort_callback` | ✅ **Confirmée** | `set_abort_callback_safe`, ainsi que `set_progress_callback_safe` et `set_segment_callback_safe` |
 | Chargement dynamique des backends ggml | ❌ **Invalidée** | Non exposé : sélection par feature Cargo, liaison statique. Repli appliqué — voir [ADR-001](#adr-001--stratégie-daccélération-matérielle) |
-| VAD Silero accessible depuis `whisper-rs` | ✅ **Confirmée** | Module `whisper_vad` complet : `enable_vad`, `set_vad_model_path`, `set_vad_params`, `WhisperVadContext` |
-| Vulkan atteint les seuils du [§5.2](#52-performance) | ⏳ Ouverte | La feature `vulkan` existe ; performance à mesurer au [Jalon 2](ROADMAP.md#jalon-2--robustesse-cli) |
-| Build FFmpeg minimale ≤ 15 Mo | ⏳ Ouverte | Non abordée avant le [Jalon 4](ROADMAP.md#jalon-4--packaging-et-cicd) |
+| VAD Silero accessible depuis `whisper-rs` | ✅ **Confirmée — mais pas par la voie prévue** (J2) | La détection (`WhisperVadContext`) fonctionne. En revanche `enable_vad` est sans effet via whisper-rs : `WhisperState::full` appelle `whisper_full_with_state`, qui ignore `params.vad`. Et la voie `whisper_full` laisse les tokens dans la chronologie compactée. VAD orchestré par Scripta — voir [SF-04](#sf-04--moteur-de-transcription-locale) |
+| Vulkan atteint les seuils du [§5.2](#52-performance) | ⏳ **Reportée au J4** | Aucune machine GPU disponible. À mesurer quand la variante Vulkan sera construite ([Jalon 4](ROADMAP.md#jalon-4--packaging-et-cicd)). Repli : les seuils GPU restent indicatifs, le CPU tient les siens |
+| Build FFmpeg minimale ≤ 15 Mo | ⏳ **Reportée au J4** | Tâche 4.2. Repli : accepter la taille d'une build standard et la documenter |
 
 ## Annexe E — Prérequis de compilation
 

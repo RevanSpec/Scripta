@@ -245,12 +245,16 @@ Section "Phase 2 - transcription Whisper"
 # whisper.cpp recopie l'audio entier avec 30 s de padding avant de calculer le
 # mel (log_mel_spectrogram) : il réside donc DEUX fois en mémoire. Omettre ce
 # poste sous-estimait la prédiction de 224 Mo exactement.
+#
+# Avec le VAD, actif par défaut, l'audio est compacté sur place avant d'être
+# confié à whisper.cpp : la copie padded et le mel ne portent plus que sur la
+# parole. Calculée sur la durée totale, la prédiction devient un majorant.
 $padMo = ($dureeAudio * 16000 + 480400) * 4 / 1MB
 $overheadMo = 338   # tampons de calcul ggml, mesurés, indépendants de la durée
 $modelMo = 141
 $cretePrevueMo = $pcmMo + $padMo + $melMo + $modelMo + $overheadMo
 Write-Host ("  PCM {0:N0} + copie whisper {1:N0} + mel {2:N0} + modele ~{3:N0} + ggml {4:N0} Mo" -f $pcmMo, $padMo, $melMo, $modelMo, $overheadMo)
-Write-Host ("  Crete prevue : {0:N0} Mo" -f $cretePrevueMo)
+Write-Host ("  Crete prevue : {0:N0} Mo (sans VAD ; majorant avec)" -f $cretePrevueMo)
 Write-Host "  En cours... (Ctrl-C interrompt proprement, et c'est aussi un test)"
 
 $Json = Join-Path $OutDir "run.json"
