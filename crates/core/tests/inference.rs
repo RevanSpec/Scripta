@@ -3,11 +3,13 @@
 //! Ces tests nécessitent un modèle GGML et un échantillon audio, trop
 //! volumineux pour le dépôt. Ils se **sautent proprement** quand
 //! `SCRIPTA_TEST_MODEL` et `SCRIPTA_TEST_WAV` ne sont pas définis, afin que la
-//! CI reste verte sans eux.
+//! CI reste verte sans eux. Les tests du VAD demandent en outre le modèle
+//! Silero, désigné par `SCRIPTA_TEST_VAD`.
 //!
 //! ```text
 //! SCRIPTA_TEST_MODEL=/chemin/ggml-tiny.bin \
 //! SCRIPTA_TEST_WAV=/chemin/jfk.wav \
+//! SCRIPTA_TEST_VAD=/chemin/ggml-silero-v5.1.2.bin \
 //! cargo test -p scripta-core --test inference -- --test-threads=1
 //! ```
 //!
@@ -21,8 +23,10 @@
 
 use std::path::PathBuf;
 
-use scripta_core::audio::PcmDecoder;
-use scripta_core::transcribe::{CancelToken, Engine, Hooks, Options};
+use std::sync::{Arc, Mutex};
+
+use scripta_core::audio::{PcmDecoder, SAMPLE_RATE};
+use scripta_core::transcribe::{CancelToken, Engine, Hooks, NewSegment, Options};
 
 fn fixture(var: &str) -> Option<PathBuf> {
     let p = PathBuf::from(std::env::var_os(var)?);
@@ -94,7 +98,7 @@ fn transcrit_l_echantillon_de_reference() {
 
     let transcript = f
         .engine
-        .transcribe(&f.samples, &Options::default(), Hooks::default())
+        .transcribe(f.samples, &Options::default(), Hooks::default())
         .expect("inférence");
 
     assert!(!transcript.is_empty(), "aucun segment produit");
@@ -115,13 +119,14 @@ fn transcrit_l_echantillon_de_reference() {
 #[test]
 fn les_horodatages_sont_coherents() {
     let f = fixtures_or_skip!();
+    // Relevée avant l'appel : `transcribe` consomme le tampon.
+    let duree_audio = scripta_core::transcribe::duration_of(&f.samples);
 
     let transcript = f
         .engine
-        .transcribe(&f.samples, &Options::default(), Hooks::default())
+        .transcribe(f.samples, &Options::default(), Hooks::default())
         .expect("inférence");
 
-    let duree_audio = scripta_core::transcribe::duration_of(&f.samples);
     let mut precedent = 0.0f64;
 
     for seg in &transcript.segments {
@@ -146,16 +151,16 @@ fn les_horodatages_sont_coherents() {
 fn la_progression_est_rapportee() {
     let f = fixtures_or_skip!();
 
-    let vus = std::sync::Arc::new(std::sync::Mutex::new(Vec::<i32>::new()));
-    let collecteur = std::sync::Arc::clone(&vus);
+    let vus = Arc::new(Mutex::new(Vec::<i32>::new()));
+    let collecteur = Arc::clone(&vus);
 
     f.engine
         .transcribe(
-            &f.samples,
+            f.samples,
             &Options::default(),
             Hooks {
                 on_progress: Some(Box::new(move |p| collecteur.lock().unwrap().push(p))),
-                cancel: None,
+                ..Default::default()
             },
         )
         .expect("inférence");
@@ -186,11 +191,11 @@ fn un_jeton_non_arme_n_interrompt_pas() {
     let transcript = f
         .engine
         .transcribe(
-            &f.samples,
+            f.samples,
             &Options::default(),
             Hooks {
-                on_progress: None,
                 cancel: Some(CancelToken::new()), // vivant, jamais armé
+                ..Default::default()
             },
         )
         .expect("un jeton non armé ne doit pas faire échouer l'inférence");
@@ -211,11 +216,11 @@ fn l_annulation_interrompt_l_inference() {
     token.cancel(); // armé avant le démarrage : abandon déterministe
 
     match f.engine.transcribe(
-        &f.samples,
+        f.samples,
         &Options::default(),
         Hooks {
-            on_progress: None,
             cancel: Some(token),
+            ..Default::default()
         },
     ) {
         Err(e) => assert_eq!(e.exit_code(), 130),
@@ -236,7 +241,7 @@ fn reconstruit_les_mots_depuis_les_tokens() {
     let transcript = f
         .engine
         .transcribe(
-            &f.samples,
+            f.samples,
             &Options {
                 word_timestamps: true,
                 ..Default::default()
@@ -287,7 +292,7 @@ fn pas_de_mots_sans_horodatage_demande() {
 
     let transcript = f
         .engine
-        .transcribe(&f.samples, &Options::default(), Hooks::default())
+        .transcribe(f.samples, &Options::default(), Hooks::default())
         .expect("inférence");
 
     assert!(transcript.segments.iter().all(|s| s.words.is_empty()));
@@ -299,9 +304,173 @@ fn un_buffer_vide_est_refuse() {
 
     match f
         .engine
-        .transcribe(&[], &Options::default(), Hooks::default())
+        .transcribe(Vec::new(), &Options::default(), Hooks::default())
     {
         Err(e) => assert_eq!(e.exit_code(), 40),
         Ok(_) => panic!("un buffer vide ne devrait pas produire de transcription"),
+    }
+}
+
+/// Les segments émis en cours d'inférence sont ceux de la transcription
+/// finale, dans l'ordre : c'est ce qui permet à la GUI de les afficher au fil
+/// de l'eau, et à la CLI d'en tirer position et vitesse.
+#[test]
+fn les_segments_sont_emis_au_fil_de_l_eau() {
+    let f = fixtures_or_skip!();
+
+    let emis = Arc::new(Mutex::new(Vec::<NewSegment>::new()));
+    let collecteur = Arc::clone(&emis);
+
+    let transcript = f
+        .engine
+        .transcribe(
+            f.samples,
+            &Options::default(),
+            Hooks {
+                on_segment: Some(Box::new(move |s| {
+                    collecteur.lock().unwrap().push(s.clone())
+                })),
+                ..Default::default()
+            },
+        )
+        .expect("inférence");
+
+    let emis = emis.lock().unwrap();
+    assert_eq!(emis.len(), transcript.segments.len(), "segments manquants");
+    for (e, s) in emis.iter().zip(&transcript.segments) {
+        assert_eq!(e.id, s.id);
+        assert_eq!(e.text, s.text);
+        assert!((e.start - s.start).abs() < 1e-9, "{e:?} / {s:?}");
+        assert!((e.end - s.end).abs() < 1e-9, "{e:?} / {s:?}");
+    }
+}
+
+// ------------------------------------------------------------------ VAD ------
+
+fn modele_vad() -> Option<std::path::PathBuf> {
+    let m = fixture("SCRIPTA_TEST_VAD");
+    if m.is_none() {
+        eprintln!("ignoré : SCRIPTA_TEST_VAD non défini");
+    }
+    m
+}
+
+fn silence(secondes: f64) -> Vec<f32> {
+    vec![0.0; (secondes * SAMPLE_RATE as f64) as usize]
+}
+
+/// Test d'exactitude du VAD : la même phrase, précédée et séparée de longs
+/// silences, doit retrouver ses **vraies** positions — segments et mots.
+///
+/// C'est précisément ce qu'échoue le VAD intégré de whisper.cpp 1.8.3 : il
+/// replace les segments, pas les tokens, si bien que les mots de la seconde
+/// occurrence y arriveraient plusieurs secondes trop tôt, hors de leur propre
+/// segment.
+#[test]
+fn le_vad_conserve_la_chronologie_d_origine() {
+    let f = fixtures_or_skip!();
+    let Some(vad) = modele_vad() else { return };
+
+    let duree_phrase = scripta_core::transcribe::duration_of(&f.samples);
+    let (avant, entre) = (5.0, 7.0);
+    let debut_second = avant + duree_phrase + entre;
+
+    let mut audio = silence(avant);
+    audio.extend_from_slice(&f.samples);
+    audio.extend(silence(entre));
+    audio.extend_from_slice(&f.samples);
+
+    let transcript = f
+        .engine
+        .transcribe(
+            audio,
+            &Options {
+                vad_model: Some(vad),
+                word_timestamps: true,
+                ..Default::default()
+            },
+            Hooks::default(),
+        )
+        .expect("inférence avec VAD");
+
+    let premier = transcript.segments.first().expect("au moins un segment");
+    assert!(
+        premier.start >= avant - 0.5,
+        "la parole commence à {avant} s, pas à {} s",
+        premier.start
+    );
+
+    // Chaque mot reste dans les bornes de son segment : c'est ce que casse un
+    // décalage des tokens.
+    for seg in &transcript.segments {
+        for mot in &seg.words {
+            assert!(
+                mot.start >= seg.start - 0.05 && mot.end <= seg.end + 0.05,
+                "mot hors de son segment : {mot:?} dans [{}, {}]",
+                seg.start,
+                seg.end
+            );
+        }
+    }
+
+    // Les deux occurrences de « fellow » : la seconde doit tomber dans la
+    // seconde phrase, décalée de la durée réelle qui les sépare.
+    let fellow: Vec<f64> = transcript
+        .segments
+        .iter()
+        .flat_map(|s| &s.words)
+        .filter(|m| m.word.to_lowercase().contains("fellow"))
+        .map(|m| m.start)
+        .collect();
+    assert_eq!(fellow.len(), 2, "occurrences de « fellow » : {fellow:?}");
+    assert!(
+        fellow[1] >= debut_second - 0.5,
+        "seconde occurrence à {:.2} s, attendue après {debut_second:.2} s",
+        fellow[1]
+    );
+    let ecart = fellow[1] - fellow[0];
+    let attendu = duree_phrase + entre;
+    assert!(
+        (ecart - attendu).abs() < 1.0,
+        "écart de {ecart:.2} s entre les occurrences, attendu {attendu:.2} s"
+    );
+}
+
+/// Sans parole, la transcription est vide — ce n'est pas une panne.
+#[test]
+fn sans_parole_la_transcription_est_vide() {
+    let f = fixtures_or_skip!();
+    let Some(vad) = modele_vad() else { return };
+
+    let transcript = f
+        .engine
+        .transcribe(
+            silence(5.0),
+            &Options {
+                vad_model: Some(vad),
+                ..Default::default()
+            },
+            Hooks::default(),
+        )
+        .expect("un silence n'est pas une erreur");
+    assert!(transcript.is_empty(), "{:?}", transcript.segments);
+}
+
+/// Un chemin de modèle VAD erroné est un modèle indisponible (code 30), pas
+/// une désactivation silencieuse du VAD.
+#[test]
+fn un_modele_vad_absent_est_signale() {
+    let f = fixtures_or_skip!();
+
+    match f.engine.transcribe(
+        f.samples,
+        &Options {
+            vad_model: Some("vad-qui-n-existe-pas.bin".into()),
+            ..Default::default()
+        },
+        Hooks::default(),
+    ) {
+        Err(e) => assert_eq!(e.exit_code(), 30),
+        Ok(_) => panic!("le VAD a été ignoré en silence"),
     }
 }

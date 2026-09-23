@@ -5,17 +5,21 @@
 //! de nouveaux segments, pas par un découpage manuel de l'audio — qui
 //! dégraderait la qualité aux jointures.
 
+use std::ffi::{CStr, c_int, c_void};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, get_lang_str,
+    whisper_rs_sys,
 };
 
 use crate::audio::SAMPLE_RATE;
+pub use crate::cancel::CancelToken;
 use crate::error::{Result, ScriptaError};
 use crate::transcript::{Segment, Transcript, Word};
+use crate::vad::{self, TimeMap};
 
 /// Backend d'accélération effectivement compilé dans ce binaire.
 ///
@@ -81,6 +85,12 @@ pub struct Options {
     pub word_timestamps: bool,
     /// Modèle VAD Silero. Son absence désactive le VAD.
     pub vad_model: Option<PathBuf>,
+    /// Seuil de probabilité d'absence de parole au-delà duquel un segment est
+    /// écarté. `None` : valeur de whisper.cpp (0,6).
+    pub no_speech_thold: Option<f32>,
+    /// Seuil d'entropie sous lequel un décodage, jugé répétitif, est repris à
+    /// température plus élevée. `None` : valeur de whisper.cpp (2,4).
+    pub entropy_thold: Option<f32>,
 }
 
 impl Default for Options {
@@ -92,6 +102,8 @@ impl Default for Options {
             initial_prompt: None,
             word_timestamps: false,
             vad_model: None,
+            no_speech_thold: None,
+            entropy_thold: None,
         }
     }
 }
@@ -100,27 +112,6 @@ pub fn default_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
-}
-
-/// Jeton d'annulation, armé depuis un autre thread (bouton « Annuler » de la
-/// GUI, `SIGINT` en CLI). Interrogé par whisper.cpp entre ses fenêtres de
-/// traitement : sans lui, une inférence lancée depuis plusieurs minutes ne peut
-/// pas être interrompue.
-#[derive(Debug, Clone, Default)]
-pub struct CancelToken(Arc<AtomicBool>);
-
-impl CancelToken {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
-    }
 }
 
 /// Trampoline du rappel d'abandon, appelé par ggml depuis le code natif.
@@ -137,12 +128,95 @@ unsafe extern "C" fn abort_trampoline(user_data: *mut std::ffi::c_void) -> bool 
     unsafe { (*(user_data as *const AtomicBool)).load(Ordering::SeqCst) }
 }
 
+/// Segment émis en cours d'inférence, avant la fin de la transcription.
+///
+/// Provisoire en ce qu'il ne porte ni mots ni probabilités, que seule la
+/// transcription finale reconstruit. Ses horodatages sont en revanche
+/// définitifs, et exprimés sur la chronologie d'origine même quand le VAD a
+/// retiré des silences.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewSegment {
+    pub id: usize,
+    /// Début, en secondes depuis le début du média.
+    pub start: f64,
+    /// Fin, en secondes.
+    pub end: f64,
+    pub text: String,
+}
+
+/// Rappel de progression globale, en pourcentage.
+pub type ProgressHook = Box<dyn FnMut(i32) + Send>;
+
+/// Rappel appelé pour chaque segment dès son émission.
+pub type SegmentHook = Box<dyn FnMut(&NewSegment) + Send>;
+
 /// Rappels de progression — SPEC SF-04.
 #[derive(Default)]
 pub struct Hooks {
-    /// Progression globale, en pourcentage.
-    pub on_progress: Option<Box<dyn FnMut(i32) + Send>>,
+    pub on_progress: Option<ProgressHook>,
+    /// Affichage progressif en GUI ; position et vitesse de la progression en
+    /// CLI.
+    pub on_segment: Option<SegmentHook>,
     pub cancel: Option<CancelToken>,
+}
+
+/// Contexte du rappel de segments, prêté au code natif le temps de `full()`.
+struct SegmentRelay<'a> {
+    carte: &'a TimeMap,
+    rappel: SegmentHook,
+}
+
+/// Trampoline du rappel de nouveaux segments, appelé par whisper.cpp.
+///
+/// `set_segment_callback_safe` de whisper-rs 0.16.0 n'est pas employé : il
+/// fuit sa fermeture à chaque transcription, et ne connaît pas la chronologie
+/// d'origine. Le relais est ici prêté pour la seule durée de `full()`.
+///
+/// # Sécurité
+///
+/// `user_data` doit pointer sur un `SegmentRelay` vivant pendant tout l'appel à
+/// `full()`, ce que garantit [`Engine::transcribe`]. Seules des fonctions de
+/// **lecture** de l'état sont appelées : muter l'état depuis un rappel
+/// violerait les garanties de whisper.cpp.
+unsafe extern "C" fn segment_trampoline(
+    _ctx: *mut whisper_rs_sys::whisper_context,
+    state: *mut whisper_rs_sys::whisper_state,
+    n_new: c_int,
+    user_data: *mut c_void,
+) {
+    if user_data.is_null() || state.is_null() {
+        return;
+    }
+    // SÉCURITÉ : voir la documentation de la fonction.
+    let relais = unsafe { &mut *(user_data as *mut SegmentRelay<'_>) };
+
+    // Une panique ne doit pas traverser la frontière FFI : elle y avorterait
+    // le processus. Un rappel défaillant perd son segment, pas la transcription.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SÉCURITÉ : lectures seules sur un état valide pendant le rappel.
+        let n = unsafe { whisper_rs_sys::whisper_full_n_segments_from_state(state) };
+        for i in (n - n_new).max(0)..n {
+            let (texte, t0, t1) = unsafe {
+                let brut = whisper_rs_sys::whisper_full_get_segment_text_from_state(state, i);
+                let texte = if brut.is_null() {
+                    String::new()
+                } else {
+                    CStr::from_ptr(brut).to_string_lossy().into_owned()
+                };
+                (
+                    texte,
+                    whisper_rs_sys::whisper_full_get_segment_t0_from_state(state, i),
+                    whisper_rs_sys::whisper_full_get_segment_t1_from_state(state, i),
+                )
+            };
+            (relais.rappel)(&NewSegment {
+                id: i as usize,
+                start: relais.carte.to_original_s(t0),
+                end: relais.carte.to_original_s(t1),
+                text: texte,
+            });
+        }
+    }));
 }
 
 /// Modèle chargé. Le chargement est coûteux : réutiliser l'instance entre
@@ -158,12 +232,24 @@ pub struct Engine {
 /// `log` ou `tracing` — les supprime purement et simplement, ce qui préserve le
 /// contrat de sortie du [§4.1](SPEC) : `stderr` ne porte que nos diagnostics.
 ///
-/// Les erreurs réelles ne sont pas perdues : elles remontent par `Result`.
-/// TODO(J2) : réactiver ces logs derrière `--verbose` via la feature
-/// `log_backend`.
-fn silence_native_logs() {
+/// Les erreurs réelles ne sont pas perdues : elles remontent par `Result`, et
+/// [`enable_native_logs`] rend ces journaux à `stderr` pour `--verbose`.
+pub(crate) fn silence_native_logs() {
+    if JOURNAUX_NATIFS.load(Ordering::SeqCst) {
+        return;
+    }
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(whisper_rs::install_logging_hooks);
+}
+
+static JOURNAUX_NATIFS: AtomicBool = AtomicBool::new(false);
+
+/// Laisse whisper.cpp et ggml écrire leurs journaux sur `stderr` — `--verbose`.
+///
+/// À appeler **avant** le premier chargement de modèle : une fois installée, la
+/// redirection des journaux est définitive.
+pub fn enable_native_logs() {
+    JOURNAUX_NATIFS.store(true, Ordering::SeqCst);
 }
 
 impl Engine {
@@ -199,9 +285,14 @@ impl Engine {
     }
 
     /// Transcrit un buffer PCM 16 kHz mono.
+    ///
+    /// Le tampon est **consommé** : avec le VAD, il est compacté sur place pour
+    /// ne garder que la parole (voir [`vad`]), ce qui évite d'en allouer un
+    /// second au moment du pic mémoire. L'appelant qui a besoin de la durée de
+    /// l'audio la relève donc avant l'appel.
     pub fn transcribe(
         &self,
-        samples: &[f32],
+        mut samples: Vec<f32>,
         options: &Options,
         hooks: Hooks,
     ) -> Result<Transcript> {
@@ -212,6 +303,39 @@ impl Engine {
                 detail: "aucun échantillon audio à transcrire".to_string(),
             });
         }
+
+        let Hooks {
+            on_progress,
+            on_segment,
+            cancel,
+        } = hooks;
+
+        // VAD — SPEC SF-04. Détection de la parole, puis compactage sur place.
+        let carte = match &options.vad_model {
+            Some(modele) => {
+                if !modele.is_file() {
+                    return Err(ScriptaError::ModelUnavailable {
+                        detail: format!("modèle VAD introuvable : {}", modele.display()),
+                    });
+                }
+                let plages = vad::detect(modele, &samples)?;
+                if crate::cancel::is_cancelled(cancel.as_ref()) {
+                    return Err(ScriptaError::Interrupted);
+                }
+                if plages.is_empty() {
+                    // Aucune parole détectée : une transcription vide est la
+                    // réponse exacte, pas une panne.
+                    return Ok(Transcript {
+                        segments: Vec::new(),
+                        language: options.language.clone(),
+                        language_probability: None,
+                        translated: options.translate,
+                    });
+                }
+                vad::compact(&mut samples, &plages)
+            }
+            None => TimeMap::identity(),
+        };
 
         let mut state = self
             .ctx
@@ -242,27 +366,30 @@ impl Engine {
         if let Some(prompt) = &options.initial_prompt {
             params.set_initial_prompt(prompt);
         }
-
-        // VAD — SPEC SF-04. `enable_vad` panique si le chemin n'est pas défini
-        // au préalable : l'ordre des deux appels est contraint.
-        if let Some(vad) = &options.vad_model {
-            if vad.is_file() {
-                params.set_vad_model_path(Some(&vad.to_string_lossy()));
-                params.enable_vad(true);
-            } else {
-                return Err(ScriptaError::ModelUnavailable {
-                    detail: format!("modèle VAD introuvable : {}", vad.display()),
-                });
-            }
+        if let Some(seuil) = options.no_speech_thold {
+            params.set_no_speech_thold(seuil);
         }
-
-        let Hooks {
-            on_progress,
-            cancel,
-        } = hooks;
+        if let Some(seuil) = options.entropy_thold {
+            params.set_entropy_thold(seuil);
+        }
 
         if let Some(mut cb) = on_progress {
             params.set_progress_callback_safe(move |p: i32| cb(p));
+        }
+
+        // Le relais vit sur la pile jusqu'après `full()` : le pointeur cédé au
+        // code natif reste valide pendant tout l'appel.
+        let mut relais = on_segment.map(|rappel| SegmentRelay {
+            carte: &carte,
+            rappel,
+        });
+        if let Some(r) = relais.as_mut() {
+            // SÉCURITÉ : voir `segment_trampoline`.
+            unsafe {
+                params.set_new_segment_callback(Some(segment_trampoline));
+                params
+                    .set_new_segment_callback_user_data(r as *mut SegmentRelay<'_> as *mut c_void);
+            }
         }
 
         // ⚠ `set_abort_callback_safe` est INUTILISABLE en whisper-rs 0.16.0 :
@@ -284,11 +411,12 @@ impl Engine {
             // et le trampoline ne fait qu'y lire un booléen atomique.
             unsafe {
                 params.set_abort_callback(Some(abort_trampoline));
-                params.set_abort_callback_user_data(raw as *mut std::ffi::c_void);
+                params.set_abort_callback_user_data(raw as *mut c_void);
             }
         }
 
-        let issue = state.full(params, samples);
+        let issue = state.full(params, &samples);
+        drop(relais);
 
         // Reprise du compteur de références cédé à `Arc::into_raw`. À faire
         // impérativement après `full()` : le code natif lit ce pointeur
@@ -305,7 +433,7 @@ impl Engine {
         // en `InferenceFailed` ferait passer une annulation volontaire pour une
         // panne, et le second livrerait une transcription tronquée présentée
         // comme complète.
-        if cancel.map(|t| t.is_cancelled()).unwrap_or(false) {
+        if crate::cancel::is_cancelled(cancel.as_ref()) {
             return Err(ScriptaError::Interrupted);
         }
 
@@ -313,7 +441,7 @@ impl Engine {
             detail: format!("inférence : {e}"),
         })?;
 
-        Ok(build_transcript(&self.ctx, &state, options))
+        Ok(build_transcript(&self.ctx, &state, options, &carte))
     }
 }
 
@@ -348,7 +476,15 @@ pub fn check_translate_supported(model_id: &str, translate: bool) -> Result<()> 
 /// **initial de mot commence par une espace** ; c'est elle qui sert de
 /// frontière. Les bornes du mot sont celles de son premier et de son dernier
 /// token, et sa probabilité la moyenne des leurs.
-fn build_words(ctx: &WhisperContext, segment: &whisper_rs::WhisperSegment<'_>) -> Vec<Word> {
+///
+/// Les horodatages des tokens sont ramenés sur la chronologie d'origine par
+/// `carte` : sans cela, avec le VAD, chaque silence retiré décalerait les mots
+/// qui le suivent.
+fn build_words(
+    ctx: &WhisperContext,
+    segment: &whisper_rs::WhisperSegment<'_>,
+    carte: &TimeMap,
+) -> Vec<Word> {
     let eot = ctx.token_eot();
     let mut mots: Vec<Word> = Vec::new();
     let mut probas: Vec<Vec<f32>> = Vec::new();
@@ -370,8 +506,8 @@ fn build_words(ctx: &WhisperContext, segment: &whisper_rs::WhisperSegment<'_>) -
         }
 
         let data = token.token_data();
-        let debut = data.t0 as f64 / 100.0;
-        let fin = data.t1 as f64 / 100.0;
+        let debut = carte.to_original_s(data.t0);
+        let fin = carte.to_original_s(data.t1);
         let nouveau_mot = texte.starts_with(' ') || mots.is_empty();
 
         if nouveau_mot {
@@ -401,6 +537,7 @@ fn build_transcript(
     ctx: &WhisperContext,
     state: &whisper_rs::WhisperState,
     options: &Options,
+    carte: &TimeMap,
 ) -> Transcript {
     let n = state.full_n_segments();
     let mut segments = Vec::with_capacity(n.max(0) as usize);
@@ -418,14 +555,14 @@ fn build_transcript(
 
         segments.push(Segment {
             id: i as usize,
-            // Les horodatages whisper.cpp sont en centisecondes.
-            start: seg.start_timestamp() as f64 / 100.0,
-            end: seg.end_timestamp() as f64 / 100.0,
+            // Horodatages whisper.cpp en centisecondes, sur l'audio compacté.
+            start: carte.to_original_s(seg.start_timestamp()),
+            end: carte.to_original_s(seg.end_timestamp()),
             text,
             no_speech_prob: Some(seg.no_speech_probability()),
             avg_logprob: None,
             words: if options.word_timestamps {
-                build_words(ctx, &seg)
+                build_words(ctx, &seg, carte)
             } else {
                 Vec::new()
             },
@@ -461,17 +598,6 @@ mod tests {
         // Sans traduction, turbo reste parfaitement utilisable.
         assert!(check_translate_supported("ggml-large-v3-turbo-q5_0", false).is_ok());
         assert!(check_translate_supported("ggml-large-v3", true).is_ok());
-    }
-
-    #[test]
-    fn jeton_d_annulation() {
-        let token = CancelToken::new();
-        assert!(!token.is_cancelled());
-        // Un clone partage l'état : c'est ce qui permet d'armer l'annulation
-        // depuis un autre thread pendant que full() bloque.
-        let clone = token.clone();
-        clone.cancel();
-        assert!(token.is_cancelled());
     }
 
     #[test]

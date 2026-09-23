@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::cancel::{self, CancelToken};
 use crate::error::{Result, ScriptaError};
 
 /// Délai d'établissement de la connexion.
@@ -114,7 +115,9 @@ pub const MODELS: &[ModelSpec] = &[
     },
 ];
 
-/// Modèle VAD Silero — SPEC SF-04. Il vit dans un dépôt distinct.
+/// Modèle VAD Silero — SPEC SF-03, SF-04. Il vit dans un dépôt distinct, et
+/// suit le même cycle de vie que les modèles Whisper : téléchargé à la première
+/// utilisation, vérifié par empreinte.
 pub const VAD_MODEL: ModelSpec = ModelSpec {
     alias: "silero",
     file: "ggml-silero-v5.1.2.bin",
@@ -136,6 +139,14 @@ pub fn find(alias: &str) -> Option<&'static ModelSpec> {
         return MODELS.iter().find(|m| m.alias == vise);
     }
     MODELS.iter().find(|m| m.alias == alias)
+}
+
+/// Résout un alias de **tout** le catalogue, modèle VAD compris.
+///
+/// Réservé à la gestion du cache (`scripta models pull|rm|verify`) : `--model`
+/// passe par [`find`], puisque le modèle VAD ne sait pas transcrire.
+pub fn find_any(alias: &str) -> Option<&'static ModelSpec> {
+    find(alias).or_else(|| (alias == VAD_MODEL.alias || alias == "vad").then_some(&VAD_MODEL))
 }
 
 pub fn aliases() -> Vec<&'static str> {
@@ -164,7 +175,14 @@ pub type ProgressFn<'a> = &'a mut dyn FnMut(u64, u64);
 /// Sa taille est en revanche contrôlée, ce qui est gratuit et détecte la
 /// troncature — de loin le mode de corruption le plus courant. La vérification
 /// complète est disponible à la demande via [`verify`].
-pub fn ensure(spec: &ModelSpec, progress: ProgressFn<'_>) -> Result<PathBuf> {
+///
+/// Un jeton armé interrompt le téléchargement en conservant le fichier `.part`,
+/// que la tentative suivante reprendra là où celle-ci s'est arrêtée.
+pub fn ensure(
+    spec: &ModelSpec,
+    progress: ProgressFn<'_>,
+    cancel: Option<&CancelToken>,
+) -> Result<PathBuf> {
     let destination = path_of(spec)?;
 
     if let Ok(meta) = fs::metadata(&destination) {
@@ -186,7 +204,7 @@ pub fn ensure(spec: &ModelSpec, progress: ProgressFn<'_>) -> Result<PathBuf> {
         detail: format!("création de {} : {e}", dossier.display()),
     })?;
 
-    download_verified(&spec.url(), &destination, spec.sha256, progress)?;
+    download_verified(&spec.url(), &destination, spec.sha256, progress, cancel)?;
     Ok(destination)
 }
 
@@ -200,9 +218,10 @@ pub fn download_verified(
     destination: &Path,
     sha256: &str,
     progress: ProgressFn<'_>,
+    cancel: Option<&CancelToken>,
 ) -> Result<()> {
     let partiel = destination.with_extension("part");
-    telecharger(url, &partiel, progress)?;
+    telecharger(url, &partiel, progress, cancel)?;
 
     let empreinte = hash_file(&partiel)?;
     if empreinte != sha256 {
@@ -224,7 +243,12 @@ pub fn download_verified(
     Ok(())
 }
 
-fn telecharger(url: &str, partiel: &Path, progress: ProgressFn<'_>) -> Result<()> {
+fn telecharger(
+    url: &str,
+    partiel: &Path,
+    progress: ProgressFn<'_>,
+    cancel: Option<&CancelToken>,
+) -> Result<()> {
     // Reprise : un `.part` déjà présent provient d'un transfert interrompu.
     // Sur un fichier d'un gigaoctet, tout reprendre serait coûteux.
     let deja = fs::metadata(partiel).map(|m| m.len()).unwrap_or(0);
@@ -272,6 +296,12 @@ fn telecharger(url: &str, partiel: &Path, progress: ProgressFn<'_>) -> Result<()
 
     progress(deja, total);
     loop {
+        if cancel::is_cancelled(cancel) {
+            // Le `.part` reste en place, complet jusqu'au dernier bloc écrit :
+            // la prochaine tentative le reprendra par une requête `Range`.
+            fichier.flush().map_err(|e| io_err(partiel, e))?;
+            return Err(ScriptaError::Interrupted);
+        }
         let n = corps.read(&mut tampon).map_err(|e| io_err(partiel, e))?;
         if n == 0 {
             break;
@@ -320,18 +350,22 @@ fn hash_file(chemin: &Path) -> Result<String> {
         .collect())
 }
 
-/// Modèles présents dans le cache, avec leur état.
+/// Vrai si le modèle est présent avec la taille attendue.
+///
+/// Même contrôle que [`ensure`] : la taille, gratuite, plutôt que l'empreinte,
+/// qui coûterait plusieurs secondes sur un gros modèle.
+pub fn is_installed(spec: &ModelSpec) -> Result<bool> {
+    Ok(fs::metadata(path_of(spec)?)
+        .map(|meta| meta.len() == spec.size)
+        .unwrap_or(false))
+}
+
+/// Modèles Whisper présents dans le cache, avec leur état.
+///
+/// Le modèle VAD n'y figure pas : il ne se choisit pas comme modèle de
+/// transcription. Voir [`VAD_MODEL`] et [`is_installed`].
 pub fn installed() -> Result<Vec<(&'static ModelSpec, bool)>> {
-    let dir = models_dir()?;
-    Ok(MODELS
-        .iter()
-        .map(|m| {
-            let taille_ok = fs::metadata(dir.join(m.file))
-                .map(|meta| meta.len() == m.size)
-                .unwrap_or(false);
-            (m, taille_ok)
-        })
-        .collect())
+    MODELS.iter().map(|m| Ok((m, is_installed(m)?))).collect()
 }
 
 pub fn remove(spec: &ModelSpec) -> Result<bool> {
@@ -391,6 +425,25 @@ mod tests {
         assert!(find("inconnu").is_none());
         // `auto` doit toujours résoudre, quel que soit le backend compilé.
         assert!(find("auto").is_some());
+    }
+
+    #[test]
+    fn le_modele_vad_ne_se_choisit_pas_pour_transcrire() {
+        // `--model silero` chargerait un modèle incapable de transcrire.
+        assert!(find("silero").is_none());
+        assert!(find("vad").is_none());
+        // Mais il se gère comme les autres dans le cache.
+        assert_eq!(find_any("silero"), Some(&VAD_MODEL));
+        assert_eq!(find_any("vad"), Some(&VAD_MODEL));
+        assert_eq!(find_any("base").map(|m| m.alias), Some("base"));
+        assert!(find_any("inconnu").is_none());
+    }
+
+    #[test]
+    fn le_modele_vad_n_est_pas_liste_parmi_les_modeles_de_transcription() {
+        let liste = installed().expect("liste des modèles");
+        assert_eq!(liste.len(), MODELS.len());
+        assert!(liste.iter().all(|(m, _)| m.alias != VAD_MODEL.alias));
     }
 
     #[test]
