@@ -16,8 +16,8 @@ much all it is to say
 
 ## État du projet
 
-**En cours de développement.** Le cœur fonctionne de bout en bout ; l'outil
-n'est pas encore empaqueté ni distribué.
+**La CLI est publiée** — v0.1.0, pour Windows, Linux et macOS Apple Silicon.
+L'application de bureau est en cours de développement.
 
 | | État |
 |---|---|
@@ -33,7 +33,7 @@ n'est pas encore empaqueté ni distribué.
 | Cache de transcriptions | ✅ |
 | Mise à jour de l'extracteur | ✅ |
 | Application de bureau | ⏳ |
-| Binaires précompilés | ⏳ |
+| Binaires précompilés (CLI) | ✅ v0.1.0 |
 
 Suivi détaillé dans [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -58,7 +58,28 @@ locale, traduction vers l'anglais, export `txt` / `srt` / `vtt` / `json`.
 
 ## Installation
 
-Aucun binaire précompilé pour l'instant : il faut compiler depuis les sources.
+### Binaires précompilés
+
+Les archives de chaque version sont publiées dans les
+[releases](https://github.com/RevanSpec/Scripta/releases), avec leurs sommes de
+contrôle (`SHA256SUMS`) :
+
+| Système | Archive |
+|---|---|
+| Windows 10 ou ultérieur, x86-64 | `scripta-<version>-x86_64-pc-windows-msvc.zip` |
+| Linux x86-64 (Ubuntu 22.04, Debian 12 ou plus récent) | `scripta-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS 11 ou ultérieur, Apple Silicon | `scripta-<version>-aarch64-apple-darwin.tar.gz` |
+
+Scripta invoque **yt-dlp** et **ffmpeg** sans les embarquer : installez-les
+séparément (commandes ci-dessous), placez `scripta` dans votre `PATH`, puis
+vérifiez avec `scripta doctor`.
+
+> **macOS** : le binaire n'est pas encore signé. Téléchargé par un navigateur,
+> il est bloqué par Gatekeeper ; retirez l'attribut de quarantaine avec
+> `xattr -d com.apple.quarantine scripta`.
+
+Les binaires sont compilés pour le CPU. Pour un GPU, compilez depuis les
+sources.
 
 ### Prérequis
 
@@ -71,7 +92,7 @@ l'exécuter ([SPEC Annexe E](docs/SPEC.md#annexe-e--prérequis-de-compilation)).
 | **CMake** ≥ 3.20 | build natif de whisper.cpp |
 | **libclang** (LLVM) | génération des liaisons FFI |
 | Toolchain C++ | MSVC 2022 · GCC/Clang · Xcode CLT |
-| **yt-dlp**, **ffmpeg** | extraction audio, à l'exécution cette fois |
+| **yt-dlp**, **ffmpeg** | extraction audio, à l'exécution cette fois — requis aussi avec les binaires |
 
 ```powershell
 # Windows
@@ -402,7 +423,7 @@ Dépendances : [yt-dlp](https://github.com/yt-dlp/yt-dlp) (The Unlicense),
 [FFmpeg](https://ffmpeg.org) (LGPL ou GPL selon la build) — toutes compatibles.
 
 Scripta invoque `yt-dlp` et `ffmpeg` comme programmes externes sans les
-redistribuer. Les obligations de licence attachées à leur distribution
-s'appliqueront à partir de l'empaquetage des binaires, et un
-`THIRD_PARTY_LICENSES.md` accompagnera alors les artefacts
+redistribuer. Les bibliothèques compilées dans le binaire, elles, le sont :
+chaque archive joint leurs licences (`LICENCES-DEPENDANCES.md`) et
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)
 ([SPEC §1.3](docs/SPEC.md#13-licence-et-conformité)).

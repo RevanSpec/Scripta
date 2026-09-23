@@ -1,0 +1,30 @@
+# Licences des dépendances de Scripta
+
+Ce fichier accompagne les binaires de Scripta. Il reproduit les licences des
+bibliothèques compilées dans le binaire `scripta`, telles que les recense
+`cargo about` à partir de `Cargo.lock`. Scripta lui-même est distribué sous
+GPLv3 : voir `LICENSE`. Les programmes externes qu'il invoque — yt-dlp,
+ffmpeg — ne sont pas inclus : voir `THIRD_PARTY_LICENSES.md`.
+
+## Vue d'ensemble
+
+{{#each overview}}
+- {{{name}}} : {{count}} bibliothèque(s)
+{{/each}}
+
+{{#each licenses}}
+---
+
+## {{{name}}}
+
+Utilisée par :
+
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}{{#if crate.repository}} — {{crate.repository}}{{/if}}
+{{/each}}
+
+```text
+{{{text}}}
+```
+
+{{/each}}

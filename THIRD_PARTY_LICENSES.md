@@ -3,12 +3,16 @@
 Scripta est distribué sous [GPLv3](LICENSE). Ce document recense les
 composants tiers et leurs conditions.
 
-> **Portée actuelle.** Scripta **n'embarque encore aucun binaire tiers** :
-> `yt-dlp` et `ffmpeg` sont invoqués comme programmes externes, installés
-> séparément par l'utilisateur. Les obligations attachées à leur
-> *redistribution* ne s'appliqueront donc qu'à partir de l'empaquetage
-> (Jalon 4), où ce fichier devra accompagner les artefacts et être complété
-> des textes de licence intégraux.
+> **Portée actuelle.** Depuis la v0.1.0, la CLI est distribuée en binaire.
+> Ses archives n'embarquent **ni yt-dlp ni ffmpeg**, invoqués comme programmes
+> externes et installés séparément par l'utilisateur : les obligations
+> attachées à leur redistribution ne s'appliqueront qu'aux bundles de
+> l'application de bureau (Jalon 4).
+>
+> Les bibliothèques compilées dans le binaire, elles, sont redistribuées.
+> Chaque archive joint donc `LICENCES-DEPENDANCES.md`, l'inventaire complet de
+> leurs licences, textes intégraux compris, généré à la release par
+> `cargo about` (voir `about.toml`).
 
 ---
 
@@ -47,8 +51,8 @@ Liées statiquement dans le binaire, donc redistribuées.
 
 | Crate | Licence |
 |---|---|
-| [whisper-rs](https://github.com/tazz4843/whisper-rs) | MIT |
-| whisper-rs-sys, incluant [whisper.cpp](https://github.com/ggml-org/whisper.cpp) et ggml | MIT |
+| [whisper-rs](https://codeberg.org/tazz4843/whisper-rs), whisper-rs-sys | The Unlicense |
+| [whisper.cpp](https://github.com/ggml-org/whisper.cpp) et ggml, dont whisper-rs-sys embarque les sources | MIT |
 | [clap](https://github.com/clap-rs/clap) | MIT ou Apache-2.0 |
 | [serde](https://serde.rs), serde_json | MIT ou Apache-2.0 |
 | [ureq](https://github.com/algesten/ureq), rustls | MIT ou Apache-2.0 |
@@ -58,13 +62,20 @@ Liées statiquement dans le binaire, donc redistribuées.
 | [url](https://github.com/servo/rust-url) | MIT ou Apache-2.0 |
 | [ctrlc](https://github.com/Detegr/rust-ctrlc) | MIT ou Apache-2.0 |
 
-Toutes sont permissives et compatibles avec la GPLv3.
+Toutes sont permissives et compatibles avec la GPLv3. Parmi les dépendances
+transitives figurent aussi une bibliothèque sous MPL-2.0 (`option-ext`) et les
+certificats racines de `webpki-roots`, sous CDLA-Permissive-2.0 : compatibles
+elles aussi, leurs textes figurent dans l'inventaire.
 
 L'inventaire exhaustif, dépendances transitives comprises, s'obtient par :
 
 ```bash
-cargo install cargo-about && cargo about generate about.hbs
+cargo install cargo-about --locked --features cli
+cargo about generate --locked about.hbs -o LICENCES-DEPENDANCES.md
 ```
+
+`about.toml` fixe la liste des licences acceptées : une dépendance sous une
+autre licence fait échouer la génération, donc la release.
 
 ---
 
