@@ -258,8 +258,8 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > - la signature et la notarisation macOS, le binaire universel ;
 > - les installeurs et les sidecars embarqués (4.1, 4.2) ;
 > - la tâche quotidienne (4.7) et le banc de performance en CI (4.8) ;
-> - la glibc 2.31 visée par le §5.3 : la v0.1.0 exige la 2.35 de sa machine
->   de build.
+> - la glibc 2.31 visée par le §5.3 : la v0.1.0 exige la 2.34, relevée sur
+>   le binaire construit sous Ubuntu 22.04.
 
 **Objectif :** un `git tag` produit des artefacts installables et signés pour les trois plateformes.
 

@@ -32,9 +32,9 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-          # 22.04 plutôt que latest : un binaire Linux exige au moins la glibc
-          # de sa machine de build, et 2.35 couvre plus de distributions que la
-          # 2.39 de la 24.04.
+          # 22.04 plutôt que latest : un binaire Linux exige au plus la glibc
+          # de sa machine de build. Construit ici, il n'en demande que la 2.34
+          # (relevée à chaque build), contre jusqu'à 2.39 sous la 24.04.
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
           - os: macos-latest
@@ -46,15 +46,22 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
 
-      # Risque R9 (docs/ROADMAP.md) : sans ces deux variables, --release
-      # embarque sous MSVC un whisper.cpp non optimisé, quatre à six fois plus
-      # lent. C'est ici plus que partout ailleurs qu'il ne faut pas l'oublier.
-      - name: Optimisation MSVC (R9)
+      # Risque R9 (docs/ROADMAP.md) : sans ces variables, --release embarque
+      # sous MSVC un whisper.cpp non optimisé, quatre à six fois plus lent.
+      # C'est ici plus que partout ailleurs qu'il ne faut pas l'oublier.
+      #
+      # Runtime C **statique**, en plus : l'« .exe autonome » du §5.4 ne doit
+      # pas exiger le redistribuable Visual C++ (msvcp140.dll, vcruntime140.dll),
+      # absent d'une installation neuve de Windows. /MT côté whisper.cpp et
+      # +crt-static côté Rust vont ensemble : un mélange ne se lierait pas.
+      # Mesuré : même transcription, débit égal ou supérieur.
+      - name: Optimisation MSVC (R9) et runtime statique
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          "CMAKE_C_FLAGS_RELEASE=/MD /O2 /Ob2 /DNDEBUG"   | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "CMAKE_CXX_FLAGS_RELEASE=/MD /O2 /Ob2 /DNDEBUG" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAKE_C_FLAGS_RELEASE=/MT /O2 /Ob2 /DNDEBUG"   | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAKE_CXX_FLAGS_RELEASE=/MT /O2 /Ob2 /DNDEBUG" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "RUSTFLAGS=-C target-feature=+crt-static"      | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       # bindgen ne trouve pas toujours libclang seul sous Windows.
       - name: LIBCLANG_PATH (Windows)
@@ -102,6 +109,13 @@ jobs:
           case "$RUNNER_OS" in
             Linux) echo "glibc requise : $(objdump -T "$exe" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)" ;;
             macOS) echo "macOS minimal : $(otool -l "$exe" | awk '/minos/ {print $2; exit}')" ;;
+            Windows)
+              dll=$("/c/Program Files/LLVM/bin/llvm-objdump.exe" -p "$exe" | grep "DLL Name" | sed 's/.*DLL Name: //')
+              echo "DLL importées : $(echo $dll)"
+              if echo "$dll" | grep -qiE '^(msvcp|vcruntime)'; then
+                echo "::error::Le binaire exige le redistribuable Visual C++ : runtime statique non appliqué."
+                exit 1
+              fi ;;
           esac
 
       - name: Outil d'inventaire des licences

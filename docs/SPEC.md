@@ -735,9 +735,10 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 | macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | macOS 11 |
 
 > **Écart de la v0.1.0.** La CLI est construite sur les runners standard :
-> sous Linux, elle exige la glibc de sa machine de build — 2.35, Ubuntu 22.04
-> —, et non la 2.31 visée ; sous macOS, seul Apple Silicon est fourni, sans
-> binaire universel. Une build en conteneur et `lipo` les résorberont au
+> sous Linux, elle exige la glibc 2.34 — relevée sur le binaire construit sous
+> Ubuntu 22.04 —, et non la 2.31 visée ; sous macOS, seul Apple Silicon est
+> fourni, sans binaire universel ; sous Windows, l'exécutable est autonome,
+> runtime C lié statiquement. Une build en conteneur et `lipo` les résorberont au
 > [Jalon 4](ROADMAP.md#jalon-4--packaging-et-cicd).
 
 ### 5.4 Distribution et packaging

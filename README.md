@@ -67,7 +67,7 @@ contrôle (`SHA256SUMS`) :
 | Système | Archive |
 |---|---|
 | Windows 10 ou ultérieur, x86-64 | `scripta-<version>-x86_64-pc-windows-msvc.zip` |
-| Linux x86-64 (Ubuntu 22.04, Debian 12 ou plus récent) | `scripta-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux x86-64, glibc 2.34 ou ultérieure (Ubuntu 22.04, Debian 12, RHEL 9) | `scripta-<version>-x86_64-unknown-linux-gnu.tar.gz` |
 | macOS 11 ou ultérieur, Apple Silicon | `scripta-<version>-aarch64-apple-darwin.tar.gz` |
 
 Scripta invoque **yt-dlp** et **ffmpeg** sans les embarquer : installez-les
