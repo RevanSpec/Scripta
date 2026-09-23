@@ -145,13 +145,17 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > ni le réseau ; `--initial-prompt` manquait à la clé de cache, qui resservait
 > alors en silence une transcription obtenue sans contexte.
 >
-> 175 tests, `fmt` et `clippy -D warnings` propres ; les tests d'inférence
-> ont tourné sur de vrais modèles, VAD compris. Suite d'acceptation rejouée sur
-> la vidéo de 61 min, VAD actif : aucune anomalie au sens de ses critères,
-> pic mémoire abaissé à 999 Mo, concordance de 73 % avec les sous-titres.
-> Elle a aussi révélé deux défauts, l'un corrigé — la détection VAD, lancée
-> sur tous les threads, ajoutait cinq minutes par heure d'audio —, l'autre
-> ouvert : une boucle de répétition de 155 s (R11), en cours d'évaluation.
+> 176 tests, `fmt` et `clippy -D warnings` propres, CI verte sur les trois
+> OS ; les tests d'inférence ont tourné sur de vrais modèles, VAD compris.
+>
+> La suite d'acceptation sur 61 min, VAD actif, a révélé deux défauts, tous
+> deux corrigés : la détection VAD, lancée sur tous les threads, ajoutait
+> cinq minutes par heure d'audio ; et le contexte glissant de Whisper a
+> entretenu une boucle de répétition de 155 s (R11), que le mode VAD
+> n'utilise plus. Rejouée sur le code final : aucune anomalie, pic mémoire
+> de 863 Mo contre 1 040 sans VAD, 6,4 × temps réel, concordance de 75 % —
+> celle de la mesure sans VAD —, et une seule répétition résiduelle, de
+> 14 s, bornée à sa fenêtre.
 >
 > **La CLI est publiable.** C'est le jalon de valeur que le plan recommandait
 > de publier avant d'entamer la GUI.
@@ -169,16 +173,16 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 | ~~**2.3**~~ | ~~`core::models`~~ ✅ téléchargement, SHA-256, `.part` + renommage atomique, reprise par `Range`, timeouts, progression, annulation (le `.part` est conservé pour la reprise) | [SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper) |
 | ~~**2.4**~~ | ~~`--model auto`~~ ✅ résout vers `turbo` si un backend GPU est compilé, `base` sinon. `--backend` sans objet : le backend est lié à la compilation ([ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) révisé) | [SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper) |
 | ~~**2.5**~~ | ~~`core::format::{srt,vtt,json}`~~ ✅ contraintes de lisibilité, échappement XML pour WebVTT, schéma JSON versionné | [SF-05](SPEC.md#sf-05--formats-dexportation) |
-| ~~**2.6**~~ | ~~VAD Silero (par défaut)~~ ✅ actif par défaut, modèle téléchargé au premier usage, `--no-vad`. **Orchestré par Scripta** (`core::vad`) : par whisper-rs, le VAD intégré de whisper.cpp n'est jamais appliqué, et l'autre voie laisserait les mots dans la chronologie compactée (R10). `--initial-prompt`, `--word-timestamps`, seuils `--no-speech-thold` et `--entropy-thold`, garde `turbo` + `--translate` — désormais avant tout téléchargement | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale) |
+| ~~**2.6**~~ | ~~VAD Silero (par défaut)~~ ✅ actif par défaut, modèle téléchargé au premier usage, `--no-vad`. **Orchestré par Scripta** (`core::vad`) : par whisper-rs, le VAD intégré de whisper.cpp n'est jamais appliqué, et l'autre voie laisserait les mots dans la chronologie compactée (R10). Sans contexte glissant en mode VAD (R11), sauf avec `--initial-prompt`. `--word-timestamps`, seuils `--no-speech-thold` et `--entropy-thold`, garde `turbo` + `--translate` — désormais avant tout téléchargement | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale) |
 | ~~**2.7**~~ | ~~Progression~~ ✅ pourcentage, position dans la vidéo et vitesse, tirées du rappel de segments, sur **`stderr`** : barre vers un terminal, simples lignes sinon. `indicatif` écarté : une barre d'une ligne ne justifiait pas la dépendance. Le rappel de segments sert aussi l'affichage progressif de la GUI (3.5) | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale), [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
 | ~~**2.8**~~ | ~~Interruption~~ ✅ premier `Ctrl-C` arme le jeton d'annulation, **à toute étape** — téléchargement, sonde, extraction (sidecars tués), inférence ; second force la sortie en 130 | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
 | ~~**2.9**~~ | ~~`core::sidecar`~~ ✅ résolution à quatre niveaux, détection de version, mise à jour depuis les releases GitHub vérifiée par SHA-256, installation hors bundle, vérification de disponibilité au plus quotidienne (`SCRIPTA_NO_UPDATE_CHECK`) | [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) |
-| ~~**2.10**~~ | ~~`core::cache`~~ ✅ clé couvrant tous les paramètres influents — contexte et seuils compris —, écriture atomique, éviction LRU, consultation avant chargement du modèle | [SF-08](SPEC.md#sf-08--cache-de-transcriptions) |
+| ~~**2.10**~~ | ~~`core::cache`~~ ✅ clé couvrant tous les paramètres influents — contexte et seuils compris, entrées VAD antérieures au J2 écartées —, écriture atomique, éviction LRU, consultation avant chargement du modèle | [SF-08](SPEC.md#sf-08--cache-de-transcriptions) |
 | ~~**2.11**~~ | ~~Sous-titres officiels~~ ✅ `--prefer-subs` avec repli silencieux, sous-commande `subs` où l'absence est une erreur, analyseur WebVTT déduplicant le défilement | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées) |
 | ~~**2.12**~~ | ~~`--cookies-from-browser`~~ ✅ transmis à la sonde et à l'extraction, désactivé par défaut | [SF-09](SPEC.md#sf-09--authentification-et-confidentialité) |
 | ~~**2.13**~~ | ~~Arborescence CLI complète~~ ✅ `run` (implicite), `subs`, `models`, `cache`, `update-extractor`, `doctor` — droits d'écriture et joignabilité réseau compris ; `--force`, `-v` | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
-| ~~**2.14**~~ | ~~Suite de tests~~ ✅ 175 tests. Codes de sortie figés par un `match` exhaustif — ajouter une variante sans lui attribuer de code casse la compilation, vérifié par réintroduction. Le sidecar simulé est exclu de toute build ordinaire (feature `test-helpers`) | [§5.5](SPEC.md#55-stratégie-de-test) |
-| ~~**2.15**~~ | ~~Banc de performance~~ ✅ `scripts/test-long-video.ps1`, mesure de référence à 4,8 × temps réel sur 61 min, sans VAD. Avec le VAD, débit à remesurer après le correctif des threads de détection | [§5.2](SPEC.md#52-performance) |
+| ~~**2.14**~~ | ~~Suite de tests~~ ✅ 176 tests. Codes de sortie figés par un `match` exhaustif — ajouter une variante sans lui attribuer de code casse la compilation, vérifié par réintroduction. Le sidecar simulé est exclu de toute build ordinaire (feature `test-helpers`) | [§5.5](SPEC.md#55-stratégie-de-test) |
+| ~~**2.15**~~ | ~~Banc de performance~~ ✅ `scripts/test-long-video.ps1`, mesure de référence à 4,8 × temps réel sur 61 min, sans VAD ; 6,4 × avec, sur une autre machine | [§5.2](SPEC.md#52-performance) |
 | ~~**2.16**~~ | ~~Documentation~~ ✅ `README.md` avec avertissement CGU, `THIRD_PARTY_LICENSES.md`, `docs/VERIFICATION.md` | [§1.3](SPEC.md#13-licence-et-conformité) |
 
 ### Critères de sortie
@@ -189,7 +193,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 - [x] `Ctrl-C` pendant l'inférence rend la main en **moins de 2 secondes**, sans processus orphelin ni fichier résiduel.
 - [x] Les seuils du [§5.2](SPEC.md#52-performance) sont mesurés et inscrits dans la spécification (ajustés si nécessaire, avec justification).
 - [x] `scripta doctor` diagnostique correctement une installation saine **et** une installation dégradée (sidecar absent, cache non inscriptible, pas de réseau). *(Coché à tort le 2026-09-22 : `doctor` ne testait alors ni l'écriture ni le réseau. Vérifié le 2026-09-23 sur les trois cas — `PATH` sans sidecars, `SCRIPTA_CACHE_DIR` sous un fichier, mandataire injoignable.)*
-- [ ] CI verte sur trois OS, **toujours sans réseau**. *(Confirmée le 2026-09-22 sur `main` ; à confirmer sur la PR de clôture.)*
+- [x] CI verte sur trois OS, **toujours sans réseau**. *(Confirmée le 2026-09-22 sur `main`, puis le 2026-09-23 sur la PR de clôture — [run 35840187124](https://github.com/RevanSpec/Scripta/actions/runs/35840187124), 175 tests par OS.)*
 
 ### Risques
 
@@ -329,7 +333,7 @@ Aucune de ces tâches ne conditionne la v1.0.
 | R8 | Dérive de périmètre vers la GUI avant stabilisation du cœur | Moyen | Moyenne | J2/J3 | J3 bloqué tant que J2 n'est pas clos ; publier la **v0.1.0 CLI** pour matérialiser la valeur intermédiaire |
 | R9 | **`--release` produit un whisper.cpp non optimisé sous MSVC** | Élevé | **Avérée — contournée** | J4 | Mesuré : sans correctif, release est 4 à 6× plus lent que debug. La crate `cmake` écrase `CMAKE_CXX_FLAGS_<BUILD_TYPE>` tandis que le générateur Visual Studio compile en `--config Release` : le profil release perd son `/O2`. **Contournement appliqué** — `CMAKE_{C,CXX}_FLAGS_RELEASE` forcés par l'environnement, que le `build.rs` de `whisper-rs-sys` réinjecte en define. Vérifié : 11,7–14,0× temps réel après correctif, contre 1,4–2,0× avant. Le contournement doit être porté dans la CI, le script de test et tout pipeline d'empaquetage : `.cargo/config.toml` ne permet pas d'`[env]` conditionné à la cible. Porté dans la CI et le script de test ; reste l'empaquetage (J4). ⚠ Depuis Git Bash, MSYS convertit ces valeurs — qui commencent par `/` — en chemins, et la compilation échoue : les poser depuis PowerShell ou cmd. Correctif amont souhaitable. |
 | R10 | **VAD intégré de whisper.cpp inopérant via whisper-rs, et horodatages de mots faux par l'autre voie** | Élevé | **Avérée — contournée** | J2 | `WhisperState::full` appelle `whisper_full_with_state`, qui ignore `params.vad` : `--vad-model` n'a jamais eu d'effet. Et `whisper_full`, qui applique le VAD, ne replace pas les tokens sur la chronologie d'origine. **Contournement :** VAD orchestré par Scripta (`core::vad`) — détection Silero, compactage sur place, correspondance exacte des chronologies. Vérifié par réintroduction : avec le VAD intégré, une parole placée à 5 s ressort horodatée à 0 s, et `le_vad_conserve_la_chronologie_d_origine` échoue. À réexaminer à chaque montée de whisper-rs |
-| R11 | **Boucle de répétition observée avec le VAD sur la vidéo de référence** | Moyen | **Avérée — en évaluation** | J2 | Sur les 61 min, VAD actif : 71 segments consécutifs « et qui est en train de se faire », de 2 240 à 2 395 s — 155 s de parole perdues, là où la mesure sans VAD n'en montrait aucune. Non reproduite sur un extrait de 700 s autour de la boucle, ni avec ni sans VAD, ni sans contexte glissant : elle dépend du contexte accumulé depuis le début. Piste : couper le contexte glissant (`n_max_text_ctx = 0`), ce qui borne toute boucle à une fenêtre de 30 s, à valider sur la vidéo entière. Repli : `--no-vad`, ou VAD désactivé par défaut |
+| R11 | **Boucle de répétition entretenue par le contexte glissant, révélée par le VAD** | Moyen | **Avérée — contournée** | J2 | Sur la vidéo de référence, VAD actif : 71 segments consécutifs « et qui est en train de se faire », de 2 240 à 2 395 s — 155 s de parole perdues, là où la mesure sans VAD n'en montrait aucune. Non reproduite sur un extrait de 700 s : elle dépend du contexte accumulé depuis le début. **Évaluée sur la vidéo entière :** sans contexte glissant (`n_max_text_ctx = 0`), la boucle disparaît — pire série, 7 segments bornés à leur fenêtre —, la concordance passe de 73 à 75 % et le débit de 6,9 à 8,0×. **Contournement :** en mode VAD, aucune fenêtre n'est conditionnée sur les précédentes. **Limite :** avec `--initial-prompt`, le contexte glissant est conservé, car whisper.cpp fait passer l'invite par le même canal et whisper-rs 0.16 n'expose pas `carry_initial_prompt` ; le risque demeure dans ce cas. Les entrées de cache VAD antérieures sont écartées |
 
 ---
 
