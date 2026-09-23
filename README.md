@@ -23,6 +23,7 @@ n'est pas encore empaqueté ni distribué.
 |---|---|
 | Extraction audio sans fichier temporaire | ✅ |
 | Transcription locale (Whisper) | ✅ |
+| Détection d'activité vocale (VAD) | ✅ active par défaut |
 | Formats `txt`, `srt`, `vtt`, `json` | ✅ |
 | Horodatage au mot | ✅ |
 | Interruption propre (`Ctrl-C`) | ✅ |
@@ -108,12 +109,19 @@ cargo build --release
 > $env:CMAKE_CXX_FLAGS_RELEASE = "/MD /O2 /Ob2 /DNDEBUG"
 > cargo build --release
 > ```
+>
+> Depuis PowerShell ou cmd, pas depuis Git Bash : MSYS y convertit ces
+> valeurs, qui commencent par `/`, en chemins, et la compilation échoue.
 
 Le binaire est dans `target/release/scripta`. Vérifiez l'installation :
 
 ```bash
 scripta doctor
 ```
+
+`doctor` passe en revue les extracteurs et leurs versions, le backend compilé,
+les modèles présents, les droits d'écriture des répertoires et la joignabilité
+de YouTube, HuggingFace et GitHub. Sa dernière ligne dénombre les problèmes.
 
 ### Accélération matérielle
 
@@ -130,11 +138,16 @@ cargo build --release --features cuda     # NVIDIA uniquement
 Sans feature, la build est CPU et démarre partout. `scripta doctor` indique le
 backend compilé.
 
+> **Non éprouvé.** Seule la build CPU est construite et testée en CI. Les
+> builds GPU compilent en principe, mais aucune n'a encore été construite ni
+> mesurée (risque R1 de la [roadmap](docs/ROADMAP.md)).
+
 ---
 
 ## Démarrage rapide
 
-Le modèle est téléchargé au premier usage et vérifié par empreinte SHA-256.
+Le modèle est téléchargé au premier usage et vérifié par empreinte SHA-256,
+de même que le modèle de détection d'activité vocale (moins d'un mégaoctet).
 Il n'y a rien à préparer.
 
 ```bash
@@ -147,6 +160,7 @@ scripta "https://www.youtube.com/watch?v=<ID>"
 ```bash
 scripta models list          # catalogue et état local
 scripta models pull small    # pré-télécharge
+scripta models pull silero   # modèle VAD, pour un usage hors ligne
 scripta models verify small  # recalcule l'empreinte
 scripta models rm small
 scripta models path
@@ -157,7 +171,8 @@ scripta models path
 Une vidéo déjà transcrite ressort **instantanément** — 62 ms contre plusieurs
 minutes — et tous les formats s'en dérivent sans réinférence. La clé couvre
 tout ce qui influe sur le résultat : vidéo, modèle, langue, traduction, VAD,
-horodatage au mot. Changer l'un d'eux relance la transcription.
+horodatage au mot, contexte (`--initial-prompt`) et seuils. Changer l'un d'eux
+relance la transcription.
 
 ```bash
 scripta cache list      # entrées et volume
@@ -184,12 +199,16 @@ bundle applicatif. Y écrire invaliderait sa signature, et sur Apple Silicon
 l'application ne se lancerait plus (ADR-004). `scripta doctor` indique la
 provenance du binaire retenu : `mis à jour`, `embarqué` ou `système`.
 
+Scripta vérifie **au plus une fois par jour** qu'une version plus récente
+existe, en arrière-plan et sans jamais retarder une commande, et le signale en
+fin d'exécution. `SCRIPTA_NO_UPDATE_CHECK=1` désactive cette vérification.
+
 | Modèle | Taille | Remarque |
 |---|---|---|
 | `tiny` | 75 Mo | très rapide, qualité limitée |
 | `base` | 142 Mo | bon point de départ sur CPU |
 | `small` | 190 Mo | compromis recommandé |
-| `large-v3` | 1,1 Go | qualité maximale ; seul modèle à savoir traduire |
+| `large-v3` | 1,1 Go | qualité maximale ; recommandé pour traduire |
 | `large-v3-turbo` | 570 Mo | rapide et précis, **ne sait pas traduire** |
 
 ---
@@ -249,12 +268,17 @@ ponctuation) et traduction automatique (deux passages machine cumulés).
 | `--translate` | traduction vers l'anglais |
 | `--initial-prompt <TEXTE>` | contexte pour les noms propres et le jargon |
 | `--word-timestamps` | horodatage au mot (d'office avec `-f json`) |
-| `--vad-model <CHEMIN>` | modèle VAD Silero ; réduit fortement les hallucinations sur les silences |
+| `--no-vad` | désactive la détection d'activité vocale, active par défaut |
+| `--vad-model <CHEMIN>` | modèle VAD hors cache |
+| `--no-speech-thold <S>` | seuil d'absence de parole, entre 0 et 1 (défaut whisper.cpp : 0.6) |
+| `--entropy-thold <S>` | seuil d'entropie des décodages répétitifs (défaut : 2.4) |
 | `--max-line-width <N>` | largeur des lignes de sous-titres (défaut 42) |
 | `--max-line-count <N>` | lignes par sous-titre (défaut 2) |
 | `--max-duration <MIN>` | refus au-delà (défaut 240) |
 | `-t, --threads <N>` | threads d'inférence |
+| `--force` | écrase le fichier de sortie s'il existe |
 | `-q, --quiet` | supprime la progression |
+| `-v, --verbose` | chemins résolus, clé de cache, journaux de whisper.cpp |
 
 `scripta --help` donne la liste complète.
 
@@ -262,6 +286,21 @@ ponctuation) et traduction automatique (deux passages machine cumulés).
 
 `stdout` ne porte **que** le résultat ; progression, avertissements et erreurs
 vont sur `stderr`. `scripta <URL> -f json | jq` fonctionne donc sans `--quiet`.
+Vers un terminal, la progression s'affiche en barre — pourcentage, position dans
+la vidéo, vitesse ; redirigée vers un fichier ou une CI, en simples lignes.
+
+`-o` n'écrase jamais un fichier existant sans `--force`, et le refus tombe
+**avant** la transcription, pas après.
+
+### Détection d'activité vocale
+
+Whisper hallucine sur les silences prolongés et les passages musicaux —
+typiquement en répétant une phrase de remerciement. Le VAD Silero écarte ces
+passages avant l'inférence, qui s'en trouve aussi plus rapide sur les contenus
+peu denses. Les horodatages restent ceux de la vidéo, au mot près.
+
+Sur un contenu chanté ou très musical, le VAD peut écarter des passages utiles :
+`--no-vad` le désactive.
 
 Les codes de sortie sont contractuels
 ([SF-07](docs/SPEC.md#sf-07--taxonomie-derreurs-et-codes-de-sortie)) :
@@ -284,9 +323,11 @@ Les codes de sortie sont contractuels
 
 ### Interruption
 
-Le premier `Ctrl-C` demande l'arrêt : whisper.cpp rend la main entre deux
-fenêtres de traitement, les sous-processus sont tués, la sortie se fait en
-`130`. Un second `Ctrl-C` force la terminaison immédiate.
+Le premier `Ctrl-C` demande l'arrêt, **quelle que soit l'étape** :
+téléchargement d'un modèle (repris là où il s'est arrêté au lancement
+suivant), sonde, extraction — les sous-processus sont tués —, ou inférence, où
+whisper.cpp rend la main entre deux fenêtres de traitement. La sortie se fait
+en `130`. Un second `Ctrl-C` force la terminaison immédiate.
 
 ---
 
@@ -294,7 +335,9 @@ fenêtres de traitement, les sous-processus sont tués, la sortie se fait en
 
 L'inférence est **locale** : aucun segment transcrit, aucune URL, aucun
 identifiant ne quitte la machine. Les seules destinations réseau sont
-`youtube.com` (via `yt-dlp`) et `huggingface.co` (modèles).
+`youtube.com` (via `yt-dlp`), `huggingface.co` (modèles) et `github.com` (mise à
+jour de `yt-dlp`). La vérification quotidienne de mise à jour se résume à une
+requête `HEAD` vers `github.com` ; `SCRIPTA_NO_UPDATE_CHECK=1` la supprime.
 
 Certaines vidéos exigent une session authentifiée. `--cookies-from-browser` le
 permettra, **désactivé par défaut** et jamais activé automatiquement

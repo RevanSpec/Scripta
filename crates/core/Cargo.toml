@@ -12,21 +12,38 @@ url.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-whisper-rs = "0.16"
+# Version figée (`=`) : `transcribe.rs` contourne un défaut propre à la 0.16.0
+# (`set_abort_callback_safe`, confusion de types), et `vad.rs` remplace un VAD
+# intégré inopérant par cette voie (`whisper_full_with_state` ignore
+# `params.vad`) et imparfait par l'autre (horodatages des tokens non replacés).
+# Une montée de version doit réexaminer les deux.
+#
+# `raw-api` expose `whisper_rs_sys`, dont le relais des segments lit l'état
+# natif (voir `segment_trampoline`). Feature vide : elle ne change rien à la
+# compilation de whisper.cpp.
+whisper-rs = { version = "=0.16.0", features = ["raw-api"] }
 ureq.workspace = true
 sha2.workspace = true
 directories.workspace = true
 
-# Fixture de test : sidecar simulé (yt-dlp / ffmpeg) piloté par variables
-# d'environnement. Déclaré en binaire du paquet pour que `cargo test` expose
+# Fixture de test : sidecar simulé (yt-dlp / ffmpeg), configuré par son nom de
+# fichier. Déclaré en binaire du paquet pour que `cargo test` expose
 # CARGO_BIN_EXE_scripta-fake-sidecar aux tests d'intégration.
-# TODO(J2) : isoler derrière une feature `test-helpers`.
+#
+# `required-features` l'exclut de toute build ordinaire — `cargo build
+# --release --workspace` ne le produit pas, il ne peut donc pas finir dans un
+# artefact publié. La dépendance de dev du paquet sur lui-même, plus bas, active
+# la feature pour les seules builds de test : `cargo test` le construit sans
+# option, et aucun test ne peut être sauté faute de l'avoir demandée.
 [[bin]]
 name = "scripta-fake-sidecar"
 path = "src/bin/fake_sidecar.rs"
+required-features = ["test-helpers"]
 
 [features]
 default = []
+# Fixtures de test (sidecar simulé). Jamais activée hors des builds de test.
+test-helpers = []
 # ADR-001 révisé (J0) : whisper-rs-sys 0.15 lie les backends à la COMPILATION.
 # Le chargement dynamique ggml n'est pas exposé : un artefact par backend.
 vulkan = ["whisper-rs/vulkan"]
@@ -35,3 +52,4 @@ metal = ["whisper-rs/metal"]
 
 [dev-dependencies]
 tempfile = "3"
+scripta-core = { path = ".", features = ["test-helpers"] }

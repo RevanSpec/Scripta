@@ -1,7 +1,7 @@
 # Scripta — Roadmap d'intégration
 
-**Version :** 1.1
-**Référence :** [SPEC.md](SPEC.md) v2.1
+**Version :** 1.2
+**Référence :** [SPEC.md](SPEC.md) v2.2
 
 ---
 
@@ -44,6 +44,12 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > conséquence. Nouveau constat : les prérequis de compilation
 > ([Annexe E](SPEC.md#annexe-e--prérequis-de-compilation)) sont plus lourds
 > qu'anticipé — CMake **et** libclang.
+>
+> **Point au Jalon 2.** Trois critères sur quatre sont remplis. Reste
+> l'**exécution** de l'inférence sous Unix : la CI compile whisper.cpp et
+> exécute le pipeline sur les trois OS, mais ses tests d'inférence se sautent
+> faute de modèle — la CI de PR n'a pas accès au réseau. La tâche planifiée
+> quotidienne (4.7) la couvrira.
 
 **Objectif :** valider ou invalider les hypothèses de l'[Annexe D](SPEC.md#annexe-d--points-à-valider-en-implémentation) avant tout investissement structurel. Le code produit ici est **jetable** et ne sera pas repris.
 
@@ -60,10 +66,10 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ### Critères de sortie
 
-- [ ] Les spikes A et B compilent et s'exécutent sur **Windows et au moins une plateforme Unix**.
-- [ ] La version de `whisper-rs` est **figée**, avec justification écrite au regard des quatre callbacks requis.
-- [ ] L'[ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) est confirmé, ou le repli « deux artefacts par plateforme » est acté et sa conséquence reportée sur le [Jalon 4](#jalon-4--packaging-et-cicd).
-- [ ] L'[Annexe D](SPEC.md#annexe-d--points-à-valider-en-implémentation) ne contient plus d'hypothèse non tranchée.
+- [ ] Les spikes A et B compilent et s'exécutent sur **Windows et au moins une plateforme Unix**. *(Compilation : trois OS. Pipeline (B) : exécuté sur les trois OS en CI. Inférence (A) : exécutée sous Windows seulement.)*
+- [x] La version de `whisper-rs` est **figée**, avec justification écrite au regard des quatre callbacks requis. *(`=0.16.0` depuis le J2 ; justification dans `crates/core/Cargo.toml` : `set_abort_callback_safe` contourné, VAD intégré inopérant par cette voie — voir R10.)*
+- [x] L'[ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) est confirmé, ou le repli « deux artefacts par plateforme » est acté et sa conséquence reportée sur le [Jalon 4](#jalon-4--packaging-et-cicd). *(Repli acté ; le J4 compte désormais les variantes Vulkan.)*
+- [x] L'[Annexe D](SPEC.md#annexe-d--points-à-valider-en-implémentation) ne contient plus d'hypothèse non tranchée. *(Deux mesures restent à faire — performance Vulkan, taille d'une build FFmpeg minimale. Elles sont explicitement reportées au J4, chacune avec son repli.)*
 
 ### Risques
 
@@ -90,8 +96,9 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > couverture 100,2 %, langue française correctement détectée sur 1 467
 > segments. La mesure a révélé un doublement du tampon audio, depuis corrigé.
 >
-> **Reste à confirmer :** la CI sur les trois OS — le build natif de
-> whisper.cpp n'a été éprouvé que sous Windows/MSVC.
+> **CI confirmée sur les trois OS** le 2026-09-22
+> ([run 35735596493](https://github.com/RevanSpec/Scripta/actions/runs/35735596493)) :
+> le build natif de whisper.cpp passe sous Linux, macOS et Windows.
 
 **Objectif :** un chemin nominal de bout en bout, sans robustesse. `URL → texte sur stdout`.
 
@@ -116,7 +123,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 - [x] **Invariant zero-disk vérifié** : aucun fichier créé dans le répertoire temporaire pendant l'exécution (test instrumenté).
 - [x] Test de non-régression du deadlock `stderr` **en place et vert** — validé par réintroduction du défaut : sans drainage, `extract()` se fige et le test échoue au bout de 30 s.
 - [x] Une vidéo de 1 h se transcrit sans dépassement de mémoire. *(Mesuré le 2026-09-22, machine au repos : 61 min, 1 040 Mo, 4,8 × temps réel, couverture 100,2 %, langue `fr` correctement détectée. Le modèle mémoire prédit désormais cette valeur à l'octet près.)*
-- [ ] CI verte sur les trois OS, **sans accès réseau**. *(Vérifiée localement sous Windows ; les trois OS restent à confirmer sur la PR.)*
+- [x] CI verte sur les trois OS, **sans accès réseau**. *(Confirmée le 2026-09-22 sur `main`.)*
 
 ### Risques
 
@@ -129,9 +136,22 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 2 — Robustesse CLI
 
-> **Statut : clos.** Les seize tâches sont livrées. 133 tests verts, `fmt` et
-> `clippy -D warnings` propres, suite d'acceptation exécutée sans anomalie sur
-> une vidéo réelle de 61 min.
+> **Statut : clos** le 2026-09-23. Les seize tâches sont livrées.
+>
+> La clôture annoncée la veille était prématurée, sur quatre points depuis
+> repris : le VAD n'était pas actif par défaut — et, par la voie de
+> whisper-rs, ne s'appliquait même pas (voir 2.6 et R10) ; la progression
+> ignorait l'absence de terminal ; `doctor` ne testait ni les droits d'écriture
+> ni le réseau ; `--initial-prompt` manquait à la clé de cache, qui resservait
+> alors en silence une transcription obtenue sans contexte.
+>
+> 175 tests, `fmt` et `clippy -D warnings` propres ; les tests d'inférence
+> ont tourné sur de vrais modèles, VAD compris. Suite d'acceptation rejouée sur
+> la vidéo de 61 min, VAD actif : aucune anomalie au sens de ses critères,
+> pic mémoire abaissé à 999 Mo, concordance de 73 % avec les sous-titres.
+> Elle a aussi révélé deux défauts, l'un corrigé — la détection VAD, lancée
+> sur tous les threads, ajoutait cinq minutes par heure d'audio —, l'autre
+> ouvert : une boucle de répétition de 155 s (R11), en cours d'évaluation.
 >
 > **La CLI est publiable.** C'est le jalon de valeur que le plan recommandait
 > de publier avant d'entamer la GUI.
@@ -144,21 +164,21 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 | # | Tâche | Spécification |
 |---|---|---|
-| **2.1** | `core::error` — énuméré `ScriptaError` exhaustif, mise en correspondance des motifs de `stderr` de yt-dlp, codes de sortie | [SF-07](SPEC.md#sf-07--taxonomie-derreurs-et-codes-de-sortie) |
-| **2.2** | Gardes de recevabilité : `is_live`, `--max-duration`, limite d'âge, playlists | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées), [SF-07](SPEC.md#sf-07--taxonomie-derreurs-et-codes-de-sortie) |
-| ~~**2.3**~~ | ~~`core::models`~~ ✅ téléchargement, SHA-256, `.part` + renommage atomique, reprise par `Range`, timeouts, progression | [SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper) |
+| ~~**2.1**~~ | ~~`core::error`~~ ✅ énuméré `ScriptaError` exhaustif, classification large et tolérante du `stderr` de yt-dlp, codes de sortie figés | [SF-07](SPEC.md#sf-07--taxonomie-derreurs-et-codes-de-sortie) |
+| ~~**2.2**~~ | ~~Gardes de recevabilité~~ ✅ directs, y compris programmés (`live_status`), `--max-duration`, limite d'âge (code 12), paramètre de playlist ignoré avec avertissement | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées), [SF-07](SPEC.md#sf-07--taxonomie-derreurs-et-codes-de-sortie) |
+| ~~**2.3**~~ | ~~`core::models`~~ ✅ téléchargement, SHA-256, `.part` + renommage atomique, reprise par `Range`, timeouts, progression, annulation (le `.part` est conservé pour la reprise) | [SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper) |
 | ~~**2.4**~~ | ~~`--model auto`~~ ✅ résout vers `turbo` si un backend GPU est compilé, `base` sinon. `--backend` sans objet : le backend est lié à la compilation ([ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) révisé) | [SF-03](SPEC.md#sf-03--gestion-et-cycle-de-vie-des-modèles-whisper) |
 | ~~**2.5**~~ | ~~`core::format::{srt,vtt,json}`~~ ✅ contraintes de lisibilité, échappement XML pour WebVTT, schéma JSON versionné | [SF-05](SPEC.md#sf-05--formats-dexportation) |
-| **2.6** | VAD Silero (par défaut), `--initial-prompt`, `--word-timestamps`, **garde `turbo` + `--translate`** | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale) |
-| **2.7** | Progression : `progress_callback` + `new_segment_callback` → `indicatif` sur **`stderr`**, désactivée hors TTY | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale), [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
-| ~~**2.8**~~ | ~~Interruption~~ ✅ premier `Ctrl-C` arme le jeton d'annulation, second force la sortie en 130 | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
-| ~~**2.9**~~ | ~~`core::sidecar`~~ ✅ résolution à quatre niveaux, détection de version, mise à jour depuis les releases GitHub vérifiée par SHA-256, installation hors bundle | [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) |
-| ~~**2.10**~~ | ~~`core::cache`~~ ✅ clé couvrant tous les paramètres influents, écriture atomique, éviction LRU, consultation avant chargement du modèle | [SF-08](SPEC.md#sf-08--cache-de-transcriptions) |
+| ~~**2.6**~~ | ~~VAD Silero (par défaut)~~ ✅ actif par défaut, modèle téléchargé au premier usage, `--no-vad`. **Orchestré par Scripta** (`core::vad`) : par whisper-rs, le VAD intégré de whisper.cpp n'est jamais appliqué, et l'autre voie laisserait les mots dans la chronologie compactée (R10). `--initial-prompt`, `--word-timestamps`, seuils `--no-speech-thold` et `--entropy-thold`, garde `turbo` + `--translate` — désormais avant tout téléchargement | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale) |
+| ~~**2.7**~~ | ~~Progression~~ ✅ pourcentage, position dans la vidéo et vitesse, tirées du rappel de segments, sur **`stderr`** : barre vers un terminal, simples lignes sinon. `indicatif` écarté : une barre d'une ligne ne justifiait pas la dépendance. Le rappel de segments sert aussi l'affichage progressif de la GUI (3.5) | [SF-04](SPEC.md#sf-04--moteur-de-transcription-locale), [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
+| ~~**2.8**~~ | ~~Interruption~~ ✅ premier `Ctrl-C` arme le jeton d'annulation, **à toute étape** — téléchargement, sonde, extraction (sidecars tués), inférence ; second force la sortie en 130 | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
+| ~~**2.9**~~ | ~~`core::sidecar`~~ ✅ résolution à quatre niveaux, détection de version, mise à jour depuis les releases GitHub vérifiée par SHA-256, installation hors bundle, vérification de disponibilité au plus quotidienne (`SCRIPTA_NO_UPDATE_CHECK`) | [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) |
+| ~~**2.10**~~ | ~~`core::cache`~~ ✅ clé couvrant tous les paramètres influents — contexte et seuils compris —, écriture atomique, éviction LRU, consultation avant chargement du modèle | [SF-08](SPEC.md#sf-08--cache-de-transcriptions) |
 | ~~**2.11**~~ | ~~Sous-titres officiels~~ ✅ `--prefer-subs` avec repli silencieux, sous-commande `subs` où l'absence est une erreur, analyseur WebVTT déduplicant le défilement | [SF-01](SPEC.md#sf-01--validation-durl-et-sonde-de-métadonnées) |
 | ~~**2.12**~~ | ~~`--cookies-from-browser`~~ ✅ transmis à la sonde et à l'extraction, désactivé par défaut | [SF-09](SPEC.md#sf-09--authentification-et-confidentialité) |
-| ~~**2.13**~~ | ~~Arborescence CLI complète~~ ✅ `run` (implicite), `subs`, `models`, `cache`, `update-extractor`, `doctor` | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
-| ~~**2.14**~~ | ~~Suite de tests~~ ✅ 133 tests. Codes de sortie figés par un `match` exhaustif — ajouter une variante sans lui attribuer de code casse la compilation, vérifié par réintroduction | [§5.5](SPEC.md#55-stratégie-de-test) |
-| ~~**2.15**~~ | ~~Banc de performance~~ ✅ `scripts/test-long-video.ps1`, mesure de référence à 4,8 × temps réel sur 61 min | [§5.2](SPEC.md#52-performance) |
+| ~~**2.13**~~ | ~~Arborescence CLI complète~~ ✅ `run` (implicite), `subs`, `models`, `cache`, `update-extractor`, `doctor` — droits d'écriture et joignabilité réseau compris ; `--force`, `-v` | [§4.1](SPEC.md#41-interface-en-ligne-de-commande) |
+| ~~**2.14**~~ | ~~Suite de tests~~ ✅ 175 tests. Codes de sortie figés par un `match` exhaustif — ajouter une variante sans lui attribuer de code casse la compilation, vérifié par réintroduction. Le sidecar simulé est exclu de toute build ordinaire (feature `test-helpers`) | [§5.5](SPEC.md#55-stratégie-de-test) |
+| ~~**2.15**~~ | ~~Banc de performance~~ ✅ `scripts/test-long-video.ps1`, mesure de référence à 4,8 × temps réel sur 61 min, sans VAD. Avec le VAD, débit à remesurer après le correctif des threads de détection | [§5.2](SPEC.md#52-performance) |
 | ~~**2.16**~~ | ~~Documentation~~ ✅ `README.md` avec avertissement CGU, `THIRD_PARTY_LICENSES.md`, `docs/VERIFICATION.md` | [§1.3](SPEC.md#13-licence-et-conformité) |
 
 ### Critères de sortie
@@ -168,8 +188,8 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 - [x] `scripta <URL> -f json | jq .` fonctionne **sans `--quiet`** (preuve de la séparation stdout/stderr).
 - [x] `Ctrl-C` pendant l'inférence rend la main en **moins de 2 secondes**, sans processus orphelin ni fichier résiduel.
 - [x] Les seuils du [§5.2](SPEC.md#52-performance) sont mesurés et inscrits dans la spécification (ajustés si nécessaire, avec justification).
-- [x] `scripta doctor` diagnostique correctement une installation saine **et** une installation dégradée (sidecar absent, cache non inscriptible, pas de réseau).
-- [ ] CI verte sur trois OS, **toujours sans réseau**. *(Le build natif n'est éprouvé que sous Windows/MSVC ; c'est le dernier point ouvert du jalon.)*
+- [x] `scripta doctor` diagnostique correctement une installation saine **et** une installation dégradée (sidecar absent, cache non inscriptible, pas de réseau). *(Coché à tort le 2026-09-22 : `doctor` ne testait alors ni l'écriture ni le réseau. Vérifié le 2026-09-23 sur les trois cas — `PATH` sans sidecars, `SCRIPTA_CACHE_DIR` sous un fichier, mandataire injoignable.)*
+- [ ] CI verte sur trois OS, **toujours sans réseau**. *(Confirmée le 2026-09-22 sur `main` ; à confirmer sur la PR de clôture.)*
 
 ### Risques
 
@@ -177,7 +197,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 |---|---|
 | Les motifs de `stderr` de yt-dlp changent → mauvaise classification des erreurs | Classification par correspondance **large et tolérante**, avec repli sur `ExtractionFailed` (20) et affichage du `stderr` brut. Ne jamais faire dépendre une logique de contrôle d'une chaîne de caractères exacte |
 | Les seuils de performance ne sont pas atteints | Ils sont mesurés **ici**, pas promis. Ajuster la spécification plutôt que le code |
-| Le VAD dégrade certains contenus (chant, parole très continue) | `--no-vad` déjà prévu ; documenter le cas |
+| Le VAD dégrade certains contenus (chant, parole très continue) | `--no-vad`, documenté dans le README et dans l'aide de l'option |
 
 ---
 
@@ -233,7 +253,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 |---|---|---|
 | **4.1** | Script d'acquisition des sidecars par triplet cible (yt-dlp + ffmpeg), avec **vérification d'intégrité** | [§5.4](SPEC.md#54-distribution-et-packaging) |
 | **4.2** | **Build FFmpeg minimale** (décodeurs et démultiplexeurs strictement nécessaires) ou sélection d'une source de builds réduites | [§5.4](SPEC.md#54-distribution-et-packaging) |
-| **4.3** | Matrice GitHub Actions : 3 OS × {CLI, GUI} | [§5.4](SPEC.md#54-distribution-et-packaging) |
+| **4.3** | Matrice GitHub Actions : 3 OS × {CLI, GUI}, plus la variante Vulkan sous Windows et Linux ([ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) révisé). Contournement R9 dans chaque job Windows | [§5.4](SPEC.md#54-distribution-et-packaging) |
 | **4.4** | **Signature et notarisation macOS** de l'application **et de tous les sidecars**, binaire universel pour la CLI | [§5.4](SPEC.md#54-distribution-et-packaging), [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour) |
 | **4.5** | Installeurs : NSIS (Windows), AppImage + `.deb` (Linux), `.dmg` (macOS) | [§5.4](SPEC.md#54-distribution-et-packaging) |
 | **4.6** | Workflow de release : sommes de contrôle, notes de version, inventaire des versions de sidecars embarquées | [§5.4](SPEC.md#54-distribution-et-packaging) |
@@ -242,7 +262,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ### Critères de sortie
 
-- [ ] Un tag produit **six artefacts** (3 OS × CLI/GUI), publiés avec leurs sommes de contrôle.
+- [ ] Un tag produit les artefacts de la matrice [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) révisée — CLI et GUI sur les trois OS, et leur variante Vulkan sous Windows et Linux —, publiés avec leurs sommes de contrôle.
 - [ ] Le `.dmg` s'installe et se lance sur un **Mac vierge** (Apple Silicon), sans avertissement Gatekeeper.
 - [ ] `update-extractor` fonctionne sur l'application **installée et signée** des trois plateformes — c'est le test qui valide [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), et il **ne peut pas** être fait en mode développement.
 - [ ] La CLI démarre sur une machine **sans GPU ni driver** (validation de [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle)).
@@ -299,7 +319,7 @@ Aucune de ces tâches ne conditionne la v1.0.
 
 | # | Risque | Impact | Prob. | Jalon | Mitigation |
 |---|---|---|---|---|---|
-| R1 | Build `whisper-rs` + GPU sous Windows | Élevé | Élevée | J0 | Spike 0.1 en tout premier ; repli CPU |
+| R1 | Build `whisper-rs` + GPU sous Windows | Élevé | **Réduite** | J0 → J4 | Le build natif CPU passe sur les trois OS en CI. Le build **Vulkan** n'a jamais été tenté : à éprouver au plus tard au J4, où la variante Vulkan devient un artefact. Repli : CPU seul sous Windows |
 | R2 | Notarisation macOS des sidecars | Élevé | Élevée | J4 | `.dmg` de test en **début** de J4 ; certificats provisionnés dès le J3 |
 | R3 | **YouTube casse les extracteurs** | Élevé | **Certaine** *(question de quand, pas de si)* | Continu | [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) + tâche quotidienne 4.7 + [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour). **C'est la raison d'être de ces trois éléments** |
 | R4 | Vérification anti-robot bloquant les utilisateurs | Moyen | Élevée | J2 | Diagnostic explicite (code 12) + `--cookies-from-browser` documenté |
@@ -307,7 +327,9 @@ Aucune de ces tâches ne conditionne la v1.0.
 | R6 | Seuils de performance non atteints | Faible | **Écartée** | J2 | Mesuré à 4,8 × temps réel sur une machine au repos, contre un seuil de 3 ×. Les mesures antérieures à 2,1 × et 2,7 × étaient faussées par des compilations concurrentes : **un débit ne se mesure que sur une machine inoccupée** |
 | R7 | Deadlock `stderr` découvert tardivement | Élevé | **Écartée par construction** | J1 | Test de non-régression dédié (1.8), exigé en critère de sortie |
 | R8 | Dérive de périmètre vers la GUI avant stabilisation du cœur | Moyen | Moyenne | J2/J3 | J3 bloqué tant que J2 n'est pas clos ; publier la **v0.1.0 CLI** pour matérialiser la valeur intermédiaire |
-| R9 | **`--release` produit un whisper.cpp non optimisé sous MSVC** | Élevé | **Avérée — contournée** | J4 | Mesuré : sans correctif, release est 4 à 6× plus lent que debug. La crate `cmake` écrase `CMAKE_CXX_FLAGS_<BUILD_TYPE>` tandis que le générateur Visual Studio compile en `--config Release` : le profil release perd son `/O2`. **Contournement appliqué** — `CMAKE_{C,CXX}_FLAGS_RELEASE` forcés par l'environnement, que le `build.rs` de `whisper-rs-sys` réinjecte en define. Vérifié : 11,7–14,0× temps réel après correctif, contre 1,4–2,0× avant. Le contournement doit être porté dans la CI, le script de test et tout pipeline d'empaquetage : `.cargo/config.toml` ne permet pas d'`[env]` conditionné à la cible. Correctif amont souhaitable. |
+| R9 | **`--release` produit un whisper.cpp non optimisé sous MSVC** | Élevé | **Avérée — contournée** | J4 | Mesuré : sans correctif, release est 4 à 6× plus lent que debug. La crate `cmake` écrase `CMAKE_CXX_FLAGS_<BUILD_TYPE>` tandis que le générateur Visual Studio compile en `--config Release` : le profil release perd son `/O2`. **Contournement appliqué** — `CMAKE_{C,CXX}_FLAGS_RELEASE` forcés par l'environnement, que le `build.rs` de `whisper-rs-sys` réinjecte en define. Vérifié : 11,7–14,0× temps réel après correctif, contre 1,4–2,0× avant. Le contournement doit être porté dans la CI, le script de test et tout pipeline d'empaquetage : `.cargo/config.toml` ne permet pas d'`[env]` conditionné à la cible. Porté dans la CI et le script de test ; reste l'empaquetage (J4). ⚠ Depuis Git Bash, MSYS convertit ces valeurs — qui commencent par `/` — en chemins, et la compilation échoue : les poser depuis PowerShell ou cmd. Correctif amont souhaitable. |
+| R10 | **VAD intégré de whisper.cpp inopérant via whisper-rs, et horodatages de mots faux par l'autre voie** | Élevé | **Avérée — contournée** | J2 | `WhisperState::full` appelle `whisper_full_with_state`, qui ignore `params.vad` : `--vad-model` n'a jamais eu d'effet. Et `whisper_full`, qui applique le VAD, ne replace pas les tokens sur la chronologie d'origine. **Contournement :** VAD orchestré par Scripta (`core::vad`) — détection Silero, compactage sur place, correspondance exacte des chronologies. Vérifié par réintroduction : avec le VAD intégré, une parole placée à 5 s ressort horodatée à 0 s, et `le_vad_conserve_la_chronologie_d_origine` échoue. À réexaminer à chaque montée de whisper-rs |
+| R11 | **Boucle de répétition observée avec le VAD sur la vidéo de référence** | Moyen | **Avérée — en évaluation** | J2 | Sur les 61 min, VAD actif : 71 segments consécutifs « et qui est en train de se faire », de 2 240 à 2 395 s — 155 s de parole perdues, là où la mesure sans VAD n'en montrait aucune. Non reproduite sur un extrait de 700 s autour de la boucle, ni avec ni sans VAD, ni sans contexte glissant : elle dépend du contexte accumulé depuis le début. Piste : couper le contexte glissant (`n_max_text_ctx = 0`), ce qui borne toute boucle à une fenêtre de 30 s, à valider sur la vidéo entière. Repli : `--no-vad`, ou VAD désactivé par défaut |
 
 ---
 

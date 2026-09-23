@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
+use crate::cancel::{self, CancelToken};
 use crate::error::{Result, ScriptaError, classify_sidecar_stderr};
 use crate::url::CanonicalUrl;
 
@@ -22,6 +24,9 @@ const READ_CHUNK: usize = 64 * 1024;
 
 /// Volume de `stderr` conservé par sidecar, pour la classification d'erreurs.
 const STDERR_TAIL_BYTES: usize = 4 * 1024;
+
+/// Période de surveillance du jeton d'annulation pendant l'extraction.
+const SURVEILLANCE: Duration = Duration::from_millis(100);
 
 /// Décodeur incrémental `s16le` → `f32` normalisé dans `[-1.0, 1.0)`.
 ///
@@ -102,11 +107,17 @@ impl Sidecars {
 ///
 /// `expected_duration_s`, issu de la sonde de métadonnées (SF-01), ne sert qu'à
 /// pré-allouer le tampon.
+///
+/// Un jeton armé tue les deux sidecars et rend [`ScriptaError::Interrupted`] —
+/// y compris quand ils ont échoué d'eux-mêmes entre-temps : dans une console,
+/// `Ctrl-C` leur est délivré à eux aussi, et leur échec n'est alors que la
+/// conséquence de l'interruption.
 pub fn extract(
     sidecars: &Sidecars,
     url: &CanonicalUrl,
     expected_duration_s: Option<f64>,
     access: &crate::probe::Access,
+    cancel: Option<&CancelToken>,
 ) -> Result<Vec<f32>> {
     let mut dl = spawn_downloader(&sidecars.ytdlp, url, access)?;
 
@@ -140,13 +151,45 @@ pub fn extract(
         .expect("stdout de ffmpeg configuré en Stdio::piped");
 
     // La lecture doit précéder tout `wait()` : attendre un enfant dont la sortie
-    // n'est pas consommée est l'autre moitié du même interblocage.
-    let samples = read_samples(ff_stdout, expected_duration_s);
+    // n'est pas consommée est l'autre moitié du même interblocage. Elle se fait
+    // dans un thread dédié, ce qui laisse celui-ci libre de surveiller
+    // l'annulation : sans cela, une lecture bloquée sur un flux qui n'arrive
+    // plus rendrait « Annuler » inopérant. Le tampon traverse le canal sans
+    // être recopié.
+    let (tx, rx) = mpsc::channel();
+    let lecteur = thread::spawn(move || {
+        let _ = tx.send(read_samples(ff_stdout, expected_duration_s));
+    });
+
+    let mut annule = false;
+    let samples = loop {
+        match rx.recv_timeout(SURVEILLANCE) {
+            Ok(lu) => break lu,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if !annule && cancel::is_cancelled(cancel) {
+                    annule = true;
+                    // yt-dlp tué, ffmpeg recevrait la fin de flux ; il est tué
+                    // aussi, pour qu'un décodeur figé ne retienne pas
+                    // l'annulation. Le lecteur voit alors la fin de flux.
+                    let _ = dl.kill();
+                    let _ = ff.kill();
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break Err(std::io::Error::other("lecteur du flux interrompu"));
+            }
+        }
+    };
+    let _ = lecteur.join();
 
     let dl_status = dl.wait();
     let ff_status = ff.wait();
     let dl_stderr = dl_err.collect();
     let ff_stderr = ff_err.collect();
+
+    if annule || cancel::is_cancelled(cancel) {
+        return Err(ScriptaError::Interrupted);
+    }
 
     let samples = match samples {
         Ok(s) => s,

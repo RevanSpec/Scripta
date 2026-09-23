@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use scripta_core::audio::{self, Sidecars};
 use scripta_core::url;
-use scripta_core::{Access, ScriptaError};
+use scripta_core::{Access, CancelToken, ScriptaError};
 
 /// Au-delà de la taille d'un tampon de pipe (≈64 Kio) : de quoi bloquer à coup
 /// sûr un sidecar dont le `stderr` ne serait pas drainé.
@@ -67,6 +67,7 @@ fn extract_avec_limite(sidecars: Sidecars, limite: Duration) -> Result<Vec<f32>,
             &url_test(),
             Some(2.0),
             &Access::default(),
+            None,
         ));
     });
     match rx.recv_timeout(limite) {
@@ -88,7 +89,7 @@ fn pipeline_nominal_produit_les_echantillons_attendus() {
     );
 
     let samples =
-        audio::extract(&sc, &url_test(), Some(2.0), &Access::default()).expect("extraction");
+        audio::extract(&sc, &url_test(), Some(2.0), &Access::default(), None).expect("extraction");
 
     assert_eq!(samples.len(), 32_000);
     // Motif déterministe du sidecar : compteur 16 bits little-endian.
@@ -122,7 +123,7 @@ fn echec_ytdlp_classe_la_verification_anti_robot() {
         sidecar(dir.path(), "ffmpeg-so0"),
     );
 
-    match audio::extract(&sc, &url_test(), None, &Access::default()) {
+    match audio::extract(&sc, &url_test(), None, &Access::default(), None) {
         Err(e @ ScriptaError::AuthRequired { .. }) => assert_eq!(e.exit_code(), 12),
         other => panic!("attendu AuthRequired, obtenu {other:?}"),
     }
@@ -137,7 +138,7 @@ fn echec_ytdlp_classe_l_indisponibilite() {
         sidecar(dir.path(), "ffmpeg-so0"),
     );
 
-    match audio::extract(&sc, &url_test(), None, &Access::default()) {
+    match audio::extract(&sc, &url_test(), None, &Access::default(), None) {
         Err(e @ ScriptaError::Unavailable { .. }) => assert_eq!(e.exit_code(), 11),
         other => panic!("attendu Unavailable, obtenu {other:?}"),
     }
@@ -154,7 +155,7 @@ fn echec_ytdlp_non_reconnu_expose_le_stderr_brut() {
         sidecar(dir.path(), "ffmpeg-so0"),
     );
 
-    match audio::extract(&sc, &url_test(), None, &Access::default()) {
+    match audio::extract(&sc, &url_test(), None, &Access::default(), None) {
         Err(ScriptaError::ExtractionFailed { detail }) => {
             assert!(
                 detail.contains("totalement inedit"),
@@ -173,7 +174,7 @@ fn sidecar_absent_est_signale_explicitement() {
         sidecar(dir.path(), "ffmpeg-so0"),
     );
 
-    match audio::extract(&sc, &url_test(), None, &Access::default()) {
+    match audio::extract(&sc, &url_test(), None, &Access::default(), None) {
         Err(e @ ScriptaError::SidecarMissing { .. }) => assert_eq!(e.exit_code(), 21),
         other => panic!("attendu SidecarMissing, obtenu {other:?}"),
     }
@@ -188,7 +189,7 @@ fn flux_audio_vide_est_une_erreur() {
     );
 
     assert!(matches!(
-        audio::extract(&sc, &url_test(), None, &Access::default()),
+        audio::extract(&sc, &url_test(), None, &Access::default(), None),
         Err(ScriptaError::ExtractionFailed { .. })
     ));
 }
@@ -202,7 +203,7 @@ fn echec_ffmpeg_est_remonte() {
         sidecar(dir.path(), &format!("ffmpeg-x1-msg{msg}")),
     );
 
-    match audio::extract(&sc, &url_test(), None, &Access::default()) {
+    match audio::extract(&sc, &url_test(), None, &Access::default(), None) {
         Err(ScriptaError::ExtractionFailed { detail }) => {
             assert!(detail.contains("Invalid data"), "diagnostic : {detail}");
         }
@@ -222,7 +223,7 @@ fn aucun_fichier_temporaire_n_est_cree() {
     );
 
     let avant = std::fs::read_dir(travail.path()).unwrap().count();
-    audio::extract(&sc, &url_test(), Some(2.0), &Access::default()).expect("extraction");
+    audio::extract(&sc, &url_test(), Some(2.0), &Access::default(), None).expect("extraction");
     let apres = std::fs::read_dir(travail.path()).unwrap().count();
 
     assert_eq!(
@@ -252,8 +253,14 @@ fn le_tampon_audio_n_est_pas_realloue() {
         sidecar(dir.path(), &format!("ffmpeg-so{octets}")),
     );
 
-    let samples = audio::extract(&sc, &url_test(), Some(duree_annoncee), &Access::default())
-        .expect("extraction");
+    let samples = audio::extract(
+        &sc,
+        &url_test(),
+        Some(duree_annoncee),
+        &Access::default(),
+        None,
+    )
+    .expect("extraction");
 
     assert_eq!(samples.len(), 16_032, "flux tronqué");
     assert!(
@@ -265,6 +272,69 @@ fn le_tampon_audio_n_est_pas_realloue() {
         audio::preallocation_len(Some(duree_annoncee)),
         "le tampon a été réalloué : la marge de pré-allocation ne joue plus"
     );
+}
+
+// ----------------------------------------------------------- annulation -----
+
+/// L'annulation doit rendre la main même quand plus rien n'arrive du réseau :
+/// c'est le cas du bouton « Annuler » de la GUI, où aucun `Ctrl-C` n'est
+/// délivré aux sidecars. Sans surveillance du jeton, `extract` attendrait ici
+/// la fin d'un yt-dlp figé pendant une minute.
+#[test]
+fn l_annulation_interrompt_une_extraction_figee() {
+    let dir = fixtures();
+    let sc = Sidecars::new(
+        sidecar(dir.path(), "ytdlp-sl60000-so4096"),
+        sidecar(dir.path(), "ffmpeg-so64000"),
+    );
+
+    let jeton = CancelToken::new();
+    let armement = jeton.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        armement.cancel();
+    });
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(audio::extract(
+            &sc,
+            &url_test(),
+            Some(2.0),
+            &Access::default(),
+            Some(&jeton),
+        ));
+    });
+
+    match rx.recv_timeout(Duration::from_secs(20)) {
+        Ok(Err(e @ ScriptaError::Interrupted)) => assert_eq!(e.exit_code(), 130),
+        Ok(autre) => panic!("attendu Interrupted, obtenu {autre:?}"),
+        Err(_) => panic!("l'annulation n'a pas interrompu l'extraction figée"),
+    }
+}
+
+/// Un jeton armé prime sur un résultat, même complet : l'utilisateur a demandé
+/// l'arrêt, et l'appelant ne doit pas poursuivre vers l'inférence.
+#[test]
+fn un_jeton_arme_prime_sur_le_resultat() {
+    let dir = fixtures();
+    let sc = Sidecars::new(
+        sidecar(dir.path(), "ytdlp-so4096"),
+        sidecar(dir.path(), "ffmpeg-so64000"),
+    );
+    let jeton = CancelToken::new();
+    jeton.cancel();
+
+    match audio::extract(
+        &sc,
+        &url_test(),
+        Some(2.0),
+        &Access::default(),
+        Some(&jeton),
+    ) {
+        Err(ScriptaError::Interrupted) => {}
+        autre => panic!("attendu Interrupted, obtenu {autre:?}"),
+    }
 }
 
 // ---------------------------------------------------------------- cache -----
@@ -287,6 +357,9 @@ fn le_cache_restitue_le_document_a_l_identique() {
         translate: false,
         vad: true,
         word_timestamps: true,
+        initial_prompt: None,
+        no_speech_thold: None,
+        entropy_thold: None,
     };
 
     assert!(scripta_core::cache::get(&clef).is_none(), "cache non vide");

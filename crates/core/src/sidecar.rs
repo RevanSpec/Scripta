@@ -15,10 +15,21 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::error::{Result, ScriptaError};
 
 const GITHUB_LATEST: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
+
+/// Page de la dernière version : sa redirection désigne l'étiquette publiée.
+const GITHUB_LATEST_PAGE: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest";
+
+/// Intervalle minimal entre deux vérifications de mise à jour — SPEC SF-06.
+const UPDATE_CHECK_INTERVAL_S: u64 = 24 * 3600;
+
+/// Délai accordé à la vérification de mise à jour, qui tourne en arrière-plan.
+const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -195,9 +206,11 @@ pub fn update_ytdlp(progress: crate::models::ProgressFn<'_>) -> Result<PathBuf> 
         &destination,
         &attendu,
         progress,
+        None,
     )?;
 
     make_executable(&destination)?;
+    forget_pending_update();
     Ok(destination)
 }
 
@@ -232,6 +245,178 @@ fn parse_sums(contenu: &str, asset: &str) -> Option<String> {
         // Comparaison exacte : `yt-dlp` ne doit pas capter `yt-dlp.exe`.
         (nom == asset && somme.len() == 64).then(|| somme.to_string())
     })
+}
+
+/// Dernière version publiée de yt-dlp.
+///
+/// Lue dans la redirection de la page « latest » plutôt que par l'API de
+/// GitHub : ni quota, ni JSON, et la seule destination reste `github.com`
+/// (SF-09). Aucune donnée n'est envoyée — une requête `HEAD`, rien de plus.
+pub fn latest_ytdlp_version(timeout: Duration) -> Result<String> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .build()
+        .new_agent();
+
+    let reponse =
+        agent
+            .head(GITHUB_LATEST_PAGE)
+            .call()
+            .map_err(|e| ScriptaError::ExtractionFailed {
+                detail: format!("interrogation de {GITHUB_LATEST_PAGE} : {e}"),
+            })?;
+
+    reponse
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .and_then(version_from_location)
+        .ok_or_else(|| ScriptaError::ExtractionFailed {
+            detail: "version de yt-dlp introuvable dans la réponse de GitHub".to_string(),
+        })
+}
+
+/// `…/releases/tag/2026.08.19` → `2026.08.19`.
+fn version_from_location(location: &str) -> Option<String> {
+    let (_, etiquette) = location.rsplit_once("/tag/")?;
+    let etiquette = etiquette.trim_end_matches('/');
+    (!etiquette.is_empty() && etiquette.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .then(|| etiquette.to_string())
+}
+
+/// Vrai si `candidate` est postérieure à `current`.
+///
+/// Les versions de yt-dlp sont des dates (`2026.08.19`), parfois suivies d'un
+/// correctif (`.1`) ou, pour les nightly, d'une heure. Une comparaison
+/// numérique champ par champ les ordonne toutes ; une version illisible n'est
+/// jamais tenue pour plus récente.
+pub fn is_newer(candidate: &str, current: &str) -> bool {
+    fn champs(v: &str) -> Option<Vec<u64>> {
+        v.trim().split('.').map(|c| c.parse().ok()).collect()
+    }
+    match (champs(candidate), champs(current)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
+}
+
+/// Une version plus récente de yt-dlp est disponible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateNotice {
+    pub current: String,
+    pub latest: String,
+}
+
+/// Vrai si l'utilisateur a désactivé la vérification (`SCRIPTA_NO_UPDATE_CHECK`).
+pub fn update_check_disabled() -> bool {
+    std::env::var_os("SCRIPTA_NO_UPDATE_CHECK").is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// Vrai si la dernière vérification remonte à plus de 24 h. Une date située
+/// dans le futur — horloge reculée — ne doit pas bloquer indéfiniment.
+fn check_due(derniere: Option<u64>, maintenant: u64) -> bool {
+    match derniere {
+        None => true,
+        Some(t) => t > maintenant || maintenant - t >= UPDATE_CHECK_INTERVAL_S,
+    }
+}
+
+/// Fichier d'état de la vérification : date de la dernière, puis, le cas
+/// échéant, la version plus récente qu'elle a trouvée.
+fn update_state_path() -> Option<PathBuf> {
+    crate::paths::scripta_dir()
+        .ok()
+        .map(|d| d.join("verification-yt-dlp"))
+}
+
+fn read_update_state(chemin: &Path) -> (Option<u64>, Option<String>) {
+    let Ok(texte) = std::fs::read_to_string(chemin) else {
+        return (None, None);
+    };
+    let mut lignes = texte.lines();
+    let derniere = lignes.next().and_then(|l| l.trim().parse().ok());
+    let en_attente = lignes
+        .next()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    (derniere, en_attente)
+}
+
+/// Écriture au mieux : l'état n'est qu'une commodité, son échec ne doit rien
+/// empêcher.
+fn write_update_state(chemin: &Path, derniere: u64, en_attente: Option<&str>) {
+    if let Some(dir) = chemin.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let contenu = match en_attente {
+        Some(v) => format!("{derniere}\n{v}\n"),
+        None => format!("{derniere}\n"),
+    };
+    let _ = std::fs::write(chemin, contenu);
+}
+
+/// Lance la vérification de disponibilité d'une mise à jour — SPEC SF-06.
+///
+/// **Au plus une fois par 24 h**, **jamais bloquante** et sans télémétrie :
+/// elle tourne dans un thread détaché, et son résultat arrive par le canal
+/// rendu. Retarder la sortie de la commande pour l'attendre serait précisément
+/// un blocage : si la commande se termine avant, l'avis n'est pas perdu pour
+/// autant — il est mémorisé et rappelé au lancement suivant, jusqu'à ce que
+/// yt-dlp soit à jour.
+///
+/// Rend `None` quand il n'y a rien à vérifier ni à rappeler : aucun thread, ni
+/// aucun processus, n'est alors lancé.
+pub fn spawn_update_check(ytdlp: PathBuf) -> Option<mpsc::Receiver<UpdateNotice>> {
+    if update_check_disabled() {
+        return None;
+    }
+    let etat = update_state_path()?;
+    let maintenant = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    let (derniere, en_attente) = read_update_state(&etat);
+    let due = check_due(derniere, maintenant);
+    if !due && en_attente.is_none() {
+        return None;
+    }
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let Some(current) = version_of(&ytdlp, Kind::YtDlp) else {
+            return;
+        };
+        // L'état n'est écrit qu'une fois la requête aboutie ou échouée : une
+        // commande trop brève pour l'attendre ne consomme pas la vérification
+        // du jour, elle sera simplement retentée.
+        let (horodatage, latest) = if due {
+            let trouvee = latest_ytdlp_version(UPDATE_CHECK_TIMEOUT).ok();
+            // Hors ligne, l'avis déjà connu reste valable.
+            (maintenant, trouvee.or(en_attente))
+        } else {
+            (derniere.unwrap_or(maintenant), en_attente)
+        };
+        match latest {
+            Some(latest) if is_newer(&latest, &current) => {
+                write_update_state(&etat, horodatage, Some(&latest));
+                let _ = tx.send(UpdateNotice { current, latest });
+            }
+            // À jour, y compris parce que l'utilisateur a mis yt-dlp à jour
+            // par ses propres moyens : plus rien à rappeler.
+            _ => write_update_state(&etat, horodatage, None),
+        }
+    });
+    Some(rx)
+}
+
+/// Oublie l'avis en attente après une mise à jour réussie.
+fn forget_pending_update() {
+    let Some(etat) = update_state_path() else {
+        return;
+    };
+    if let (derniere, Some(_)) = read_update_state(&etat) {
+        write_update_state(&etat, derniere.unwrap_or(0), None);
+    }
 }
 
 /// Rend le fichier exécutable, et le fait accepter par le système.
@@ -343,6 +528,72 @@ mod tests {
         }
         // ffmpeg n'est pas distribué par ce mécanisme.
         assert!(Kind::Ffmpeg.release_asset().is_none());
+    }
+
+    #[test]
+    fn lit_la_version_dans_la_redirection() {
+        assert_eq!(
+            version_from_location("https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19")
+                .as_deref(),
+            Some("2026.08.19")
+        );
+        assert_eq!(
+            version_from_location("/yt-dlp/yt-dlp/releases/tag/2026.08.19.1/").as_deref(),
+            Some("2026.08.19.1")
+        );
+        // Une redirection inattendue — page de connexion, erreur — n'est pas
+        // une version.
+        assert!(version_from_location("https://github.com/login").is_none());
+        assert!(version_from_location("https://github.com/releases/tag/").is_none());
+        assert!(version_from_location("https://x/releases/tag/v1;rm").is_none());
+    }
+
+    #[test]
+    fn compare_les_versions_datees() {
+        assert!(is_newer("2026.09.20", "2026.08.19"));
+        assert!(is_newer("2026.08.19.1", "2026.08.19")); // correctif
+        assert!(!is_newer("2026.08.19", "2026.08.19"));
+        assert!(!is_newer("2026.08.19", "2026.09.01"));
+        // Comparaison numérique, pas lexicale : 10 > 9.
+        assert!(is_newer("2026.10.01", "2026.9.30"));
+        // Une nightly locale plus récente que la dernière stable : pas de
+        // fausse alerte.
+        assert!(!is_newer("2026.08.19", "2026.08.20.232957"));
+        // L'illisible n'est jamais « plus récent ».
+        assert!(!is_newer("inconnue", "2026.08.19"));
+        assert!(!is_newer("2026.09.20", "inconnue"));
+    }
+
+    #[test]
+    fn l_etat_de_verification_fait_l_aller_retour() {
+        let dir = tempfile::tempdir().unwrap();
+        let etat = dir.path().join("scripta").join("verification-yt-dlp");
+
+        assert_eq!(read_update_state(&etat), (None, None), "état absent");
+
+        write_update_state(&etat, 1_000, Some("2026.09.20"));
+        assert_eq!(
+            read_update_state(&etat),
+            (Some(1_000), Some("2026.09.20".to_string()))
+        );
+
+        write_update_state(&etat, 2_000, None);
+        assert_eq!(read_update_state(&etat), (Some(2_000), None));
+
+        // Un fichier corrompu vaut un état absent : la vérification sera
+        // simplement refaite.
+        std::fs::write(&etat, "n'importe quoi").unwrap();
+        assert_eq!(read_update_state(&etat).0, None);
+    }
+
+    #[test]
+    fn verification_au_plus_une_fois_par_jour() {
+        let jour = UPDATE_CHECK_INTERVAL_S;
+        assert!(check_due(None, 1_000_000));
+        assert!(!check_due(Some(1_000_000), 1_000_000 + jour - 1));
+        assert!(check_due(Some(1_000_000), 1_000_000 + jour));
+        // Horloge reculée : l'horodatage futur ne doit pas tout bloquer.
+        assert!(check_due(Some(2_000_000), 1_000_000));
     }
 
     #[test]

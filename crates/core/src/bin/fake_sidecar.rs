@@ -13,12 +13,13 @@
 //! - l'environnement d'un processus est global, ce qui rendrait les tests
 //!   dépendants de leur ordre d'exécution sous `cargo test` (qui parallélise).
 //!
-//! Grammaire : `<rôle>[-so<N>][-se<N>][-x<N>][-msg<HEX>]`
+//! Grammaire : `<rôle>[-sl<N>][-so<N>][-se<N>][-x<N>][-msg<HEX>]`
 //!
 //! | Jeton | Effet |
 //! |---|---|
 //! | `ytdlp` | rôle source : ignore stdin |
 //! | `ffmpeg` | rôle filtre : lit stdin jusqu'à EOF, comme le ferait ffmpeg |
+//! | `sl<N>` | attend `N` millisecondes avant toute chose : un sidecar figé |
 //! | `so<N>` | émet `N` octets déterministes sur stdout |
 //! | `se<N>` | déverse `N` octets sur stderr |
 //! | `x<N>` | code de sortie `N` |
@@ -32,6 +33,7 @@ use std::io::{Read, Write};
 
 struct Config {
     filter: bool,
+    sleep_ms: u64,
     stdout_bytes: usize,
     stderr_bytes: usize,
     exit: i32,
@@ -46,6 +48,7 @@ fn parse_config() -> Config {
 
     let mut cfg = Config {
         filter: stem.starts_with("ffmpeg"),
+        sleep_ms: 0,
         stdout_bytes: 0,
         stderr_bytes: 0,
         exit: 0,
@@ -53,7 +56,9 @@ fn parse_config() -> Config {
     };
 
     for token in stem.split('-').skip(1) {
-        if let Some(v) = token.strip_prefix("so") {
+        if let Some(v) = token.strip_prefix("sl") {
+            cfg.sleep_ms = v.parse().unwrap_or(0);
+        } else if let Some(v) = token.strip_prefix("so") {
             cfg.stdout_bytes = v.parse().unwrap_or(0);
         } else if let Some(v) = token.strip_prefix("se") {
             cfg.stderr_bytes = v.parse().unwrap_or(0);
@@ -79,6 +84,12 @@ fn decode_hex(s: &str) -> Option<String> {
 
 fn main() {
     let cfg = parse_config();
+
+    // Sidecar figé : réseau muet, serveur qui ne répond plus. C'est le cas où
+    // seule l'annulation peut rendre la main.
+    if cfg.sleep_ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(cfg.sleep_ms));
+    }
 
     // Rôle filtre : consomme intégralement stdin, comme ffmpeg. Sans cette
     // lecture, l'écrivain amont se bloquerait sur un pipe plein.

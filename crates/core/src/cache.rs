@@ -36,7 +36,7 @@ struct Envelope {
 /// Omettre un seul de ces paramètres ferait resservir une transcription
 /// obtenue dans d'autres conditions — le pire défaut possible pour un cache,
 /// puisqu'il est silencieux.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Key {
     pub video_id: String,
     pub model: String,
@@ -44,6 +44,11 @@ pub struct Key {
     pub translate: bool,
     pub vad: bool,
     pub word_timestamps: bool,
+    /// Contexte fourni au modèle : il change la graphie des noms propres, donc
+    /// le résultat.
+    pub initial_prompt: Option<String>,
+    pub no_speech_thold: Option<f32>,
+    pub entropy_thold: Option<f32>,
 }
 
 impl Key {
@@ -65,6 +70,24 @@ impl Key {
             self.vad as u8,
             self.word_timestamps as u8,
         ]);
+
+        // Champs facultatifs : étiquetés, pour qu'aucun ne puisse passer pour
+        // un autre, et omis quand ils sont absents. Une clé qui n'en porte
+        // aucun garde ainsi l'empreinte d'avant leur introduction, et les
+        // entrées déjà en cache restent valables.
+        if let Some(p) = &self.initial_prompt {
+            h.update(b"prompt\x1f");
+            h.update(p.as_bytes());
+            h.update(b"\x1f");
+        }
+        if let Some(v) = self.no_speech_thold {
+            h.update(b"no_speech_thold\x1f");
+            h.update(v.to_bits().to_le_bytes());
+        }
+        if let Some(v) = self.entropy_thold {
+            h.update(b"entropy_thold\x1f");
+            h.update(v.to_bits().to_le_bytes());
+        }
 
         h.finalize()
             .iter()
@@ -248,6 +271,9 @@ mod tests {
             translate: false,
             vad: false,
             word_timestamps: false,
+            initial_prompt: None,
+            no_speech_thold: None,
+            entropy_thold: None,
         }
     }
 
@@ -255,6 +281,17 @@ mod tests {
     fn l_empreinte_est_stable() {
         assert_eq!(clef().digest(), clef().digest());
         assert_eq!(clef().digest().len(), 64);
+    }
+
+    /// Les champs facultatifs, absents, laissent l'empreinte inchangée : les
+    /// transcriptions mises en cache avant leur introduction restent servies.
+    /// Valeur relevée avant l'ajout de ces champs.
+    #[test]
+    fn l_empreinte_historique_est_preservee() {
+        assert_eq!(
+            clef().digest(),
+            "3a540706689b914cf0bfeeb6dbb50309e74cb9d8684c5d42738e2cd6f5da3d3b"
+        );
     }
 
     /// Chaque paramètre influant sur le résultat doit changer l'empreinte.
@@ -291,6 +328,24 @@ mod tests {
             },
             Key {
                 word_timestamps: true,
+                ..clef()
+            },
+            Key {
+                initial_prompt: Some("Etienne Klein".into()),
+                ..clef()
+            },
+            // Un contexte vide n'est pas une absence de contexte : c'est à
+            // l'appelant de normaliser, la clé ne doit pas deviner.
+            Key {
+                initial_prompt: Some(String::new()),
+                ..clef()
+            },
+            Key {
+                no_speech_thold: Some(0.5),
+                ..clef()
+            },
+            Key {
+                entropy_thold: Some(0.5),
                 ..clef()
             },
         ];
