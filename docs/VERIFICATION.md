@@ -381,7 +381,34 @@ logiques, Windows 11.
    la même phrase, là où la mesure sans VAD n'en montrait aucune. Un extrait de
    700 s autour d'elle ne la reproduit dans aucune configuration — sans VAD,
    avec VAD, avec VAD et sans contexte glissant : elle dépend du contexte
-   accumulé depuis le début. Suivi en risque R11 de la [roadmap](ROADMAP.md).
+   accumulé depuis le début. Sur la vidéo entière, couper le contexte glissant
+   la supprime ; c'est désormais le comportement du mode VAD (risque R11 de
+   la [roadmap](ROADMAP.md)).
+
+### Mesure avec VAD, code final — 2026-09-23
+
+Même machine, VAD sur un thread, sans contexte glissant.
+
+| Grandeur | Mesuré |
+|---|---|
+| Code de sortie | `0` |
+| Durée totale | 598 s (10,0 min) |
+| Vitesse | **6,4 × temps réel** |
+| Crête mémoire | **863 Mo** |
+| Langue détectée | `fr` |
+| Segments | 930 |
+| Couverture | 96,6 % |
+| **Concordance des deux chemins** | **75 %** |
+| Répétitions | 12 segments sur 14 s vers 1 142 s, « Je ne sais pas si c'est (pas) ça », là où l'orateur hésite |
+
+La boucle de 155 s a disparu, et la concordance retrouve le niveau de la
+mesure sans VAD. La répétition résiduelle est celle que ce réglage laisse
+passer par construction : une hallucination du modèle `base` sur un passage
+hésitant, qui ne survit pas à sa fenêtre de 30 s.
+
+Le banc qui a comparé les deux réglages — mêmes données, lancés à la suite —
+mesurait 6,9 × avec contexte glissant et 8,0 × sans. L'écart avec les 6,4 × de
+la suite complète rappelle qu'un débit ne se compare qu'à conditions égales.
 
 ### Ce qu'il faut regarder
 

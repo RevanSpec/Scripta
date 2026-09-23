@@ -412,13 +412,26 @@ Paramètres complémentaires exposés : `no_speech_thold`, `entropy_thold` (`--n
 > de plusieurs threads ralentit. Mesuré sur 10 min d'audio : 1,3 s avec un
 > thread, 3,4 s avec 4, 52 s avec 20.
 >
-> **Point ouvert (R11).** Sur la vidéo de référence, le VAD a coïncidé avec
-> une boucle de répétition de 155 s absente de la mesure sans VAD. Son
-> évaluation est suivie dans la [roadmap](ROADMAP.md).
+> **Sans contexte glissant (R11).** En mode VAD, aucune fenêtre n'est
+> conditionnée sur le texte des précédentes (`n_max_text_ctx = 0`). Sur la
+> vidéo de référence, ce contexte avait entretenu une boucle de répétition de
+> 155 s. Sans lui, une boucle ne survit pas à sa fenêtre de 30 s ; la
+> concordance avec les sous-titres passe de 73 à 75 %, et le débit de 6,9 à
+> 8,0 × temps réel. Exception : avec `--initial-prompt`, le contexte est
+> conservé. whisper.cpp fait passer l'invite par le même canal, et whisper-rs
+> 0.16 n'expose pas `carry_initial_prompt`, qui permettrait de garder l'invite
+> seule.
 
 **`--initial-prompt`.**
 
 > **Ajout v2.** Levier de qualité majeur et quasi gratuit : fournir un contexte (noms propres, jargon, acronymes du domaine) améliore sensiblement la transcription des termes rares. À exposer en CLI comme en GUI.
+
+> **Limite constatée au Jalon 2.** whisper.cpp place l'invite en tête du
+> contexte glissant, qu'il reconstruit après chaque fenêtre en ne gardant que
+> les 223 derniers tokens : l'invite en sort au bout de quelques fenêtres, et
+> n'influence donc que les premières minutes. `carry_initial_prompt` la
+> maintiendrait sur toute la durée, mais whisper-rs 0.16 ne l'expose pas — à
+> reprendre avec une version qui le fera.
 
 **Progression et restitution.**
 
@@ -543,7 +556,9 @@ YouTube modifie fréquemment ses mécanismes d'extraction : un `yt-dlp` embarqu�
   > transcription avec un contexte resservait en silence celle obtenue sans.
   > Les champs facultatifs sont étiquetés, et omis quand ils sont absents :
   > l'empreinte des clés antérieures est inchangée, et le cache existant reste
-  > valable.
+  > valable. Seules les entrées marquées `vad` sont écartées, par une étiquette
+  > dédiée : leur VAD était inopérant (Annexe D), ou gardait le contexte
+  > glissant (SF-04).
 - Contenu stocké : le JSON complet (SF-05), dont tous les autres formats se dérivent sans réinférence.
 - Emplacement : `<cache_dir>/scripta/transcripts/`.
 - Contournement par `--no-cache` ; administration par `scripta cache {list,clear,path}`.
@@ -703,7 +718,7 @@ OPTIONS DE `run` :
 
 | Métrique | Seuil |
 |---|---|
-| Empreinte RSS, 1 h d'audio, modèle `base` | < 1,1 Go (mesuré : 1 040 Mo sans VAD ; 999 Mo avec) |
+| Empreinte RSS, 1 h d'audio, modèle `base` | < 1,1 Go (mesuré : 1 040 Mo sans VAD ; 863 Mo avec) |
 | Empreinte totale au pic | ≈ 560 Mo / h + ~260 Mo fixes ([ADR-003](#adr-003--inférence-non-streamée)) |
 | Démarrage CLI (`--version`, `--help`) | < 150 ms |
 | Sonde de métadonnées (SF-01) | < 3 s en conditions nominales |
@@ -793,7 +808,7 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 
 ## Annexe C — Journal des corrections
 
-**v2.2** — Retours du Jalon 2 : VAD orchestré par Scripta et motifs de l'écart (SF-04, ADR-003, Annexe D) ; seuils `no_speech_thold` / `entropy_thold` exposés ; clé de cache complétée (SF-08) ; `--backend` retiré et §4.2 aligné sur ADR-001 révisé ; `--force`, `--model-path`, `--vad-model`, chemins de sidecars ajoutés au §4.1 ; mises en œuvre de SF-06 et du diagnostic SF-07 décrites ; écart assumé sur `--threads` ; mesure mémoire de référence corrigée (1 040 Mo).
+**v2.2** — Retours du Jalon 2 : VAD orchestré par Scripta et motifs de l'écart, détection sur un thread, contexte glissant coupé en mode VAD, limite de `--initial-prompt` (SF-04, ADR-003, Annexe D) ; seuils `no_speech_thold` / `entropy_thold` exposés ; clé de cache complétée (SF-08) ; `--backend` retiré et §4.2 aligné sur ADR-001 révisé ; `--force`, `--model-path`, `--vad-model`, chemins de sidecars ajoutés au §4.1 ; mises en œuvre de SF-06 et du diagnostic SF-07 décrites ; écart assumé sur `--threads` ; mesure mémoire de référence corrigée (1 040 Mo).
 
 **v2.1** — Retours du Jalon 0 : [ADR-001](#adr-001--stratégie-daccélération-matérielle) révisé (le chargement dynamique des backends ggml n'est pas exposé par `whisper-rs-sys` 0.15 ; passage à un artefact par backend), [Annexe D](#annexe-d--points-à-valider-en-implémentation) mise à jour avec l'état réel de chaque hypothèse, [Annexe E](#annexe-e--prérequis-de-compilation) ajoutée (prérequis de compilation), MSRV portée à 1.88.
 

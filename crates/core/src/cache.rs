@@ -71,6 +71,14 @@ impl Key {
             self.word_timestamps as u8,
         ]);
 
+        // Le VAD a changé de nature au Jalon 2 : inopérant jusque-là (R10), puis
+        // appliqué sans contexte glissant (R11). Une entrée antérieure marquée
+        // `vad` n'est donc pas une transcription avec ce VAD : cette étiquette
+        // l'écarte, sans toucher aux entrées sans VAD.
+        if self.vad {
+            h.update(b"vad:j2\x1f");
+        }
+
         // Champs facultatifs : étiquetés, pour qu'aucun ne puisse passer pour
         // un autre, et omis quand ils sont absents. Une clé qui n'en porte
         // aucun garde ainsi l'empreinte d'avant leur introduction, et les
@@ -291,6 +299,21 @@ mod tests {
         assert_eq!(
             clef().digest(),
             "3a540706689b914cf0bfeeb6dbb50309e74cb9d8684c5d42738e2cd6f5da3d3b"
+        );
+    }
+
+    /// Les entrées marquées `vad` d'avant le Jalon 2 ne doivent pas être
+    /// resservies : leur VAD était inopérant (R10), ou gardait le contexte
+    /// glissant (R11). Valeur relevée avant l'étiquette.
+    #[test]
+    fn les_entrees_vad_anterieures_sont_ecartees() {
+        let vad = Key {
+            vad: true,
+            ..clef()
+        };
+        assert_ne!(
+            vad.digest(),
+            "9a298a37fb1baef23531c677a4b50d1b2b8a4382e65390166986d7e122b51877"
         );
     }
 
