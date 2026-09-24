@@ -457,16 +457,19 @@ depuis le Jalon 2 ; `--no-vad` permet la comparaison.
 
 ## 8. Application de bureau
 
-Build optimisée — `cargo tauri dev` compile whisper.cpp sans optimisation, et
-une vidéo réelle y prend cinquante fois plus de temps :
+L'installeur d'une release, de préférence : c'est lui que l'utilisateur
+recevra, sidecars compris. À défaut, une build optimisée locale —
+`cargo tauri dev` compile whisper.cpp sans optimisation, et une vidéo réelle y
+prend cinquante fois plus de temps. Sidecars acquis par les scripts de la CI
+(voir le README, « Installeur local ») ; sous Windows, un ffmpeg compilé depuis
+Linux, ou celui du système pour la seule mécanique :
 
 ```powershell
 $env:CMAKE_C_FLAGS_RELEASE   = "/MD /O2 /Ob2 /DNDEBUG"
 $env:CMAKE_CXX_FLAGS_RELEASE = "/MD /O2 /Ob2 /DNDEBUG"
 cd crates\desktop
-cargo tauri build --no-bundle
-# Jamais le PATH en build optimisée (SPEC §5.1) : sidecars à côté de l'exécutable.
-Copy-Item (Get-Command yt-dlp).Source, (Get-Command ffmpeg).Source ..\..\target\release\
+cargo tauri build --config tauri.bundle.conf.json --bundles nsis
+# Sidecars copiés à côté de l'exécutable, sous leurs noms préfixés :
 & ..\..\target\release\scripta-desktop.exe
 ```
 
@@ -474,6 +477,7 @@ Copy-Item (Get-Command yt-dlp).Source, (Get-Command ffmpeg).Source ..\..\target\
 |---|---|
 | Bandeau d'en-tête | le backend compilé et le nombre de threads ; aucun bandeau « introuvable » |
 | Onglet « Modèles et outils » | yt-dlp et ffmpeg marqués « embarqué », jamais « système » |
+| Répertoire d'installation | `scripta-yt-dlp`, `scripta-ffmpeg` à côté de l'application ; `licences/` avec les notices de yt-dlp, la LGPL et la fiche de construction de FFmpeg |
 | Coller une URL | titre, chaîne, durée et sous-titres rédigés après une pause de saisie |
 | URL invalide | « Cette adresse n'est pas celle d'une vidéo YouTube. », conseil, détail replié |
 | Transcrire | étape en cours, progression, position, vitesse ; segments au fil de l'eau |

@@ -1,7 +1,7 @@
 # Scripta — Roadmap d'intégration
 
-**Version :** 1.3
-**Référence :** [SPEC.md](SPEC.md) v2.3
+**Version :** 1.4
+**Référence :** [SPEC.md](SPEC.md) v2.4
 
 ---
 
@@ -207,9 +207,9 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 3 — Interface de bureau (Tauri v2)
 
-> **Statut : en cours — l'application fonctionne, en développement.** Onze
-> des douze tâches sont livrées. Reste 3.12 (`externalBin`), qui suppose
-> l'acquisition des sidecars du J4.
+> **Statut : en cours — l'application fonctionne, en développement.** Les
+> douze tâches sont livrées, la dernière — 3.12, `externalBin` — avec les
+> sidecars embarqués du J4. Restent des critères de sortie, ci-dessous.
 >
 > - **3.1** Squelette Tauri v2 et Svelte 5. CSS natif plutôt que Tailwind :
 >   deux vues, deux cents lignes de style, la dépendance ne se justifiait pas.
@@ -287,25 +287,34 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 4 — Packaging et CI/CD
 
-> **Statut : entamé — sous-ensemble de la CLI v0.1.1.** Un tag `v*`
-> construit la CLI sur trois cibles — Windows x86-64, Linux x86-64, macOS
-> Apple Silicon —, la contrôle, l'empaquette avec ses licences (`cargo about`)
-> et ses sommes de contrôle, puis prépare un **brouillon** de release : la
-> publication reste un geste humain. Sans tag, le workflow sert de répétition
-> générale.
+> **Statut : entamé.** Un tag `v*` construit la CLI **et l'application de
+> bureau** sur trois cibles — Windows x86-64, Linux x86-64, macOS Apple
+> Silicon —, les contrôle, les empaquette avec leurs licences et leurs sommes
+> de contrôle, puis prépare un **brouillon** de release : la publication
+> reste un geste humain. Sans tag, le workflow sert de répétition générale.
 >
 > La v0.1.0, préparée ainsi, n'a pas été publiée : elle portait le défaut de
 > threads révélé au J3 (R12). La première version publique est la v0.1.1.
 >
+> Livré :
+>
+> - **4.1** Sidecars acquis par triplet cible, et vérifiés : yt-dlp aux
+>   versions et empreintes épinglées (`scripts/sidecars/versions.env`), ffmpeg
+>   compilé depuis une archive source dont la signature a été vérifiée avant
+>   d'en épingler l'empreinte.
+> - **4.2** Build FFmpeg minimale, statique, sous LGPL : 3,2 Mo sous Linux,
+>   1,9 Mo sous Windows et macOS. Sur sa propre plateforme, chaque binaire
+>   décode cinq échantillons par la commande même du cœur.
+> - **4.5** Installeurs NSIS, AppImage et `.deb`, `.dmg` — non signés.
+> - **4.6** Sommes de contrôle, notes de version, versions des sidecars, et
+>   l'archive source de FFmpeg, que la LGPL impose de distribuer.
+>
 > Restent :
 >
-> - la GUI et les variantes Vulkan ;
-> - la signature et la notarisation macOS, le binaire universel ;
-> - les installeurs et les sidecars embarqués (4.1, 4.2) ;
+> - la signature et la notarisation macOS (4.4), le binaire universel ;
+> - la signature de l'installeur Windows, que SmartScreen signale sans elle ;
+> - les variantes Vulkan (4.3) ;
 > - la tâche quotidienne (4.7) et le banc de performance en CI (4.8) ;
-> - l'empaquetage de l'application de bureau, avec son propre inventaire de
->   licences : celui de la release CLI se limite désormais au graphe de la
->   CLI, sans quoi les dépendances de Tauri l'auraient fait échouer ;
 > - la glibc 2.31 visée par le §5.3 : la CLI exige la 2.34, relevée sur
 >   le binaire construit sous Ubuntu 22.04.
 

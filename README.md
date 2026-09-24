@@ -33,7 +33,7 @@ attendant d'être empaquetée.
 | Sous-titres YouTube officiels | ✅ |
 | Cache de transcriptions | ✅ |
 | Mise à jour de l'extracteur | ✅ |
-| Application de bureau | 🚧 fonctionnelle, non empaquetée |
+| Application de bureau | 🚧 installeurs non signés, dès la prochaine release |
 | Binaires précompilés (CLI) | ✅ v0.1.1 |
 
 Suivi détaillé dans [`docs/ROADMAP.md`](docs/ROADMAP.md).
@@ -147,9 +147,16 @@ de YouTube, HuggingFace et GitHub. Sa dernière ligne dénombre les problèmes.
 
 ### Application de bureau
 
-Tauri v2 et Svelte. Elle n'est pas encore empaquetée : elle se lance depuis les
-sources, avec, en plus des prérequis ci-dessus, **Node.js** 20 ou ultérieur et
-la CLI de Tauri.
+Tauri v2 et Svelte. Les releases à venir joignent ses installeurs — NSIS sous
+Windows, AppImage et `.deb` sous Linux, `.dmg` sous macOS. Ils embarquent
+yt-dlp et une build minimale de ffmpeg : rien d'autre à installer.
+
+> **Installeurs non signés.** Windows affiche un avertissement SmartScreen ;
+> sous macOS, retirez l'attribut de quarantaine après installation :
+> `xattr -dr com.apple.quarantine /Applications/Scripta.app`.
+
+Depuis les sources, il faut en plus des prérequis ci-dessus **Node.js** 20 ou
+ultérieur et la CLI de Tauri.
 
 ```bash
 cargo install tauri-cli --locked
@@ -176,6 +183,19 @@ sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev l
 `cargo build`, sans `-p`, ne construit que le cœur et la CLI : l'application
 exige WebKitGTK sous Linux et se construit par `cargo tauri`, qui embarque son
 frontend.
+
+**Installeur local.** Les sidecars s'acquièrent par les scripts de la CI, qui
+vérifient chaque empreinte ; `<triplet>` est celui de la machine
+(`rustc --print host-tuple`). ffmpeg se compile sous Linux et macOS — la
+version Windows, depuis Linux, par mingw-w64.
+
+```bash
+sh scripts/sidecars/fetch-ytdlp.sh <triplet> crates/desktop/binaries
+sh scripts/sidecars/build-ffmpeg.sh <triplet> crates/desktop/binaries
+cargo about generate --locked --manifest-path crates/desktop/Cargo.toml -c about.toml \
+    about.hbs -o crates/desktop/LICENCES-DEPENDANCES.md
+cd crates/desktop && cargo tauri build --config tauri.bundle.conf.json
+```
 
 ### Accélération matérielle
 
