@@ -1,7 +1,7 @@
 # Scripta — Roadmap d'intégration
 
-**Version :** 1.2
-**Référence :** [SPEC.md](SPEC.md) v2.2
+**Version :** 1.3
+**Référence :** [SPEC.md](SPEC.md) v2.3
 
 ---
 
@@ -207,6 +207,46 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 3 — Interface de bureau (Tauri v2)
 
+> **Statut : en cours — l'application fonctionne, en développement.** Onze
+> des douze tâches sont livrées. Reste 3.12 (`externalBin`), qui suppose
+> l'acquisition des sidecars du J4.
+>
+> - **3.1** Squelette Tauri v2 et Svelte 5. CSS natif plutôt que Tailwind :
+>   deux vues, deux cents lignes de style, la dépendance ne se justifiait pas.
+> - **3.2–3.3** Dix commandes IPC, et aucun travail long sur le thread
+>   principal. Progression et segments arrivent par un canal propre à chaque
+>   appel, regroupés à dix envois par seconde au plus.
+> - **3.4–3.7** Écran principal ; segments au fil de l'eau, avec un suivi que
+>   l'utilisateur interrompt en remontant ; Annuler ; options avancées (VAD,
+>   traduction, horodatage au mot, contexte, cookies).
+> - **3.8** Gestion des modèles : téléchargement avec progression et reprise,
+>   suppression, espace occupé.
+> - **3.9–3.11** Export par la boîte d'enregistrement native ; copie ; un
+>   message propre à l'interface pour chaque variante de `ScriptaError` ;
+>   mise à jour de yt-dlp.
+>
+> **Reprise du premier squelette.** Écrit avant la clôture du J2, il ne
+> compilait plus contre le cœur, et portait trois défauts de fond :
+> - `cancel` attendait un verrou tenu pendant toute l'inférence : la fenêtre
+>   se figeait jusqu'à la fin, et l'annulation n'annulait rien ;
+> - la sonde et le diagnostic s'exécutaient sur le thread principal ;
+> - son propre enchaînement avait dérivé de celui de la CLI : VAD absent, clé
+>   de cache incomplète.
+>
+> L'enchaînement vit désormais dans `core::pipeline`, commun aux deux
+> interfaces. La CLI y est passée à sortie identique.
+>
+> **Acceptation sur 61 min**, build optimisée, sous Windows. La fenêtre est
+> restée réactive de bout en bout : 14,0 × temps réel, pic mémoire de
+> 882 Mo — 19 de plus que la CLI —, 930 segments, autant que la mesure de
+> référence. Elle a révélé deux défauts, corrigés :
+> - **R12.** Le nombre de threads par défaut prenait tous les cœurs logiques.
+>   Qu'une application voisine occupe un seul cœur, et l'inférence tombait à
+>   0,2 × le temps réel, CLI comprise.
+> - **Fuite du rappel de progression.** Celui de whisper-rs fuyait sa
+>   fermeture, et avec elle, à chaque transcription, le relais des messages
+>   et son thread.
+
 **Objectif :** GUI fonctionnelle en mode développement. Le packaging relève du [Jalon 4](#jalon-4--packaging-et-cicd).
 
 **Effort :** 8–12 jours. **Prérequis :** J2 clos (le cœur doit être stable avant d'y brancher une seconde interface).
@@ -230,18 +270,18 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ### Critères de sortie
 
-- [ ] `cargo tauri dev` fonctionne sur les trois plateformes.
-- [ ] **La fenêtre reste réactive du début à la fin** d'une transcription d'une heure : aucun gel, l'annulation reste cliquable en permanence.
-- [ ] L'annulation en cours d'inférence libère les ressources en moins de 2 s.
-- [ ] L'accélération affichée correspond au matériel réel sur au moins deux configurations distinctes.
-- [ ] Aucune variante de `ScriptaError` ne produit un message technique brut dans l'interface.
+- [ ] `cargo tauri dev` fonctionne sur les trois plateformes. *(Windows : éprouvé. Linux et macOS : le crate compile et ses tests passent en CI, mais l'application n'y a pas été lancée.)*
+- [x] **La fenêtre reste réactive du début à la fin** d'une transcription d'une heure : aucun gel, l'annulation reste cliquable en permanence. *(61 min, build optimisée : onglets, options et défilement répondent pendant l'extraction comme pendant l'inférence.)*
+- [x] L'annulation en cours d'inférence libère les ressources en moins de 2 s. *(Moins d'une demi-seconde, même en build de débogage. Sur la vidéo d'une heure, la mémoire retombe de 881 à 181 Mo dans la seconde ; seul le modèle reste chargé.)*
+- [ ] L'accélération affichée correspond au matériel réel sur au moins deux configurations distinctes. *(Une seule configuration éprouvée, CPU : aucune machine GPU de test.)*
+- [x] Aucune variante de `ScriptaError` ne produit un message technique brut dans l'interface. *(Correspondance exhaustive, qu'une variante nouvelle ne passe pas sans message ; un test vérifie chaque variante.)*
 
 ### Risques
 
 | Risque | Mitigation |
 |---|---|
-| Sidecars non résolus en mode développement (chemins différents du mode bundle) | Abstraire la résolution dans `core::sidecar` dès le J2 (tâche 2.9), avec surcharge par variable d'environnement |
-| Débit d'événements trop élevé (un événement par segment sur une vidéo dense) | Regroupement temporel côté Rust (au plus ~10 émissions/s) |
+| Sidecars non résolus en mode développement (chemins différents du mode bundle) | Abstraire la résolution dans `core::sidecar` dès le J2 (tâche 2.9), avec surcharge par variable d'environnement. **Traité :** en build optimisée, la GUI ne connaît que la copie mise à jour et la copie embarquée, jamais le `PATH` (§5.1) ; le `PATH` ne sert qu'en build de débogage |
+| Débit d'événements trop élevé (un événement par segment sur une vidéo dense) | Regroupement temporel côté Rust (au plus ~10 émissions/s). **Traité :** relais à dix lots par seconde au plus, éprouvé sous flux continu ; la progression n'est transmise qu'en hausse |
 
 ---
 
@@ -258,6 +298,9 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > - la signature et la notarisation macOS, le binaire universel ;
 > - les installeurs et les sidecars embarqués (4.1, 4.2) ;
 > - la tâche quotidienne (4.7) et le banc de performance en CI (4.8) ;
+> - l'empaquetage de l'application de bureau, avec son propre inventaire de
+>   licences : celui de la release CLI se limite désormais au graphe de la
+>   CLI, sans quoi les dépendances de Tauri l'auraient fait échouer ;
 > - la glibc 2.31 visée par le §5.3 : la v0.1.0 exige la 2.34, relevée sur
 >   le binaire construit sous Ubuntu 22.04.
 
@@ -342,12 +385,13 @@ Aucune de ces tâches ne conditionne la v1.0.
 | R3 | **YouTube casse les extracteurs** | Élevé | **Certaine** *(question de quand, pas de si)* | Continu | [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) + tâche quotidienne 4.7 + [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour). **C'est la raison d'être de ces trois éléments** |
 | R4 | Vérification anti-robot bloquant les utilisateurs | Moyen | Élevée | J2 | Diagnostic explicite (code 12) + `--cookies-from-browser` documenté |
 | R5 | Chargement dynamique des backends non supporté | Moyen | Moyenne | J0 | Repli deux artefacts (+2 j sur le J4) |
-| R6 | Seuils de performance non atteints | Faible | **Écartée** | J2 | Mesuré à 4,8 × temps réel sur une machine au repos, contre un seuil de 3 ×. Les mesures antérieures à 2,1 × et 2,7 × étaient faussées par des compilations concurrentes : **un débit ne se mesure que sur une machine inoccupée** |
+| R6 | Seuils de performance non atteints | Faible | **Écartée** | J2 | Mesuré à 4,8 × temps réel sur une machine au repos, contre un seuil de 3 ×. Les mesures antérieures à 2,1 × et 2,7 × étaient faussées par des compilations concurrentes : **un débit ne se mesure que sur une machine inoccupée**. Au J3, 14,0 × avec le VAD et le nombre de threads corrigé (R12) |
 | R7 | Deadlock `stderr` découvert tardivement | Élevé | **Écartée par construction** | J1 | Test de non-régression dédié (1.8), exigé en critère de sortie |
-| R8 | Dérive de périmètre vers la GUI avant stabilisation du cœur | Moyen | **Réduite** | J2/J3 | J2 clos ; la **v0.1.0 CLI** est prête à publier (workflow de release) avant toute reprise de la GUI |
+| R8 | Dérive de périmètre vers la GUI avant stabilisation du cœur | Moyen | **Écartée** | J2/J3 | J2 clos et v0.1.0 CLI construite avant la reprise de la GUI, qui s'est branchée sur un cœur stable : son enchaînement est celui de la CLI, dans `core::pipeline` |
 | R9 | **`--release` produit un whisper.cpp non optimisé sous MSVC** | Élevé | **Avérée — contournée** | J4 | Mesuré : sans correctif, release est 4 à 6× plus lent que debug. La crate `cmake` écrase `CMAKE_CXX_FLAGS_<BUILD_TYPE>` tandis que le générateur Visual Studio compile en `--config Release` : le profil release perd son `/O2`. **Contournement appliqué** — `CMAKE_{C,CXX}_FLAGS_RELEASE` forcés par l'environnement, que le `build.rs` de `whisper-rs-sys` réinjecte en define. Vérifié : 11,7–14,0× temps réel après correctif, contre 1,4–2,0× avant. Le contournement doit être porté dans la CI, le script de test et tout pipeline d'empaquetage : `.cargo/config.toml` ne permet pas d'`[env]` conditionné à la cible. Porté dans la CI et le script de test ; reste l'empaquetage (J4). ⚠ Depuis Git Bash, MSYS convertit ces valeurs — qui commencent par `/` — en chemins, et la compilation échoue : les poser depuis PowerShell ou cmd. Correctif amont souhaitable. |
 | R10 | **VAD intégré de whisper.cpp inopérant via whisper-rs, et horodatages de mots faux par l'autre voie** | Élevé | **Avérée — contournée** | J2 | `WhisperState::full` appelle `whisper_full_with_state`, qui ignore `params.vad` : `--vad-model` n'a jamais eu d'effet. Et `whisper_full`, qui applique le VAD, ne replace pas les tokens sur la chronologie d'origine. **Contournement :** VAD orchestré par Scripta (`core::vad`) — détection Silero, compactage sur place, correspondance exacte des chronologies. Vérifié par réintroduction : avec le VAD intégré, une parole placée à 5 s ressort horodatée à 0 s, et `le_vad_conserve_la_chronologie_d_origine` échoue. À réexaminer à chaque montée de whisper-rs |
 | R11 | **Boucle de répétition entretenue par le contexte glissant, révélée par le VAD** | Moyen | **Avérée — contournée** | J2 | Sur la vidéo de référence, VAD actif : 71 segments consécutifs « et qui est en train de se faire », de 2 240 à 2 395 s — 155 s de parole perdues, là où la mesure sans VAD n'en montrait aucune. Non reproduite sur un extrait de 700 s : elle dépend du contexte accumulé depuis le début. **Évaluée sur la vidéo entière :** sans contexte glissant (`n_max_text_ctx = 0`), la boucle disparaît — pire série, 7 segments bornés à leur fenêtre —, la concordance passe de 73 à 75 % et le débit de 6,9 à 8,0×. **Contournement :** en mode VAD, aucune fenêtre n'est conditionnée sur les précédentes. **Limite :** avec `--initial-prompt`, le contexte glissant est conservé, car whisper.cpp fait passer l'invite par le même canal et whisper-rs 0.16 n'expose pas `carry_initial_prompt` ; le risque demeure dans ce cas. Les entrées de cache VAD antérieures sont écartées |
+| R12 | **Effondrement du débit quand un thread d'inférence est privé de processeur** | Élevé | **Avérée — corrigée** | J3 | ggml synchronise ses threads par attente active. Avec un thread par cœur logique — le défaut du J2 —, une application voisine occupant un seul cœur a fait tomber l'inférence à **0,2 ×** le temps réel sur un i7-13700H (14 cœurs, 20 threads logiques), contre 12 × avec 16 threads. Révélé par l'acceptation de la GUI ; la CLI y était tout aussi exposée. **Correctif :** par défaut, les cœurs physiques, en laissant au moins deux threads logiques libres (`num_cpus`), comme le prévoyait la SPEC. Sans charge voisine, le débit culmine justement aux cœurs physiques ; la vidéo de référence passe de 6,4 à 14,0 × |
 
 ---
 
