@@ -16,7 +16,7 @@ much all it is to say
 
 ## État du projet
 
-**La CLI est publiée** — v0.1.0, pour Windows, Linux et macOS Apple Silicon.
+**La CLI est publiée** — v0.1.1, pour Windows, Linux et macOS Apple Silicon.
 L'application de bureau fonctionne ; elle se lance depuis les sources, en
 attendant d'être empaquetée.
 
@@ -34,7 +34,7 @@ attendant d'être empaquetée.
 | Cache de transcriptions | ✅ |
 | Mise à jour de l'extracteur | ✅ |
 | Application de bureau | 🚧 fonctionnelle, non empaquetée |
-| Binaires précompilés (CLI) | ✅ v0.1.0 |
+| Binaires précompilés (CLI) | ✅ v0.1.1 |
 
 Suivi détaillé dans [`docs/ROADMAP.md`](docs/ROADMAP.md).
 

@@ -772,7 +772,10 @@ OPTIONS DE `run` :
 > temps réel**, pic mémoire de 882 Mo. Le gain sur les 6,4 × du J2 tient au
 > nombre de threads par défaut, ramené de 20 aux 14 cœurs physiques (SF-04),
 > et ce alors même qu'une application voisine occupait un cœur : avec
-> 20 threads, cette seule charge faisait tomber l'inférence à 0,2 ×.
+> 20 threads, cette seule charge faisait tomber l'inférence à 0,2 ×. La suite
+> d'acceptation de la CLI, rejouée dans les mêmes conditions, mesure
+> **15,8 ×** — 266 s pour l'heure de vidéo, contre 598 s au J2 —, pic mémoire
+> et concordance inchangés (863 Mo, 75 %).
 
 **Autres seuils :**
 
@@ -794,7 +797,7 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 | Windows | `x86_64-pc-windows-msvc` | Windows 10 1809 |
 | macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | macOS 11 |
 
-> **Écart de la v0.1.0.** La CLI est construite sur les runners standard :
+> **Écart des v0.1.x.** La CLI est construite sur les runners standard :
 > sous Linux, elle exige la glibc 2.34 — relevée sur le binaire construit sous
 > Ubuntu 22.04 —, et non la 2.31 visée ; sous macOS, seul Apple Silicon est
 > fourni, sans binaire universel ; sous Windows, l'exécutable est autonome,
@@ -813,7 +816,7 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 - **Build FFmpeg minimal** : seuls les décodeurs (`opus`, `vorbis`, `aac`, `mp3`), démultiplexeurs (`matroska`, `mov`, `mp3`) et le rééchantillonneur sont nécessaires. Une build ciblée descend autour de 10–15 Mo, contre 60–70 Mo pour une build complète.
 - Sur macOS, **tous** les binaires du bundle — application et sidecars — doivent être signés et notarisés ensemble, avec les droits d'exécution appropriés.
 - Chaque release publie un fichier de sommes de contrôle et la liste des versions de sidecars embarquées.
-- *(v0.1.0.)* Les archives de la CLI n'embarquent aucun sidecar. Elles joignent `LICENSE`, `THIRD_PARTY_LICENSES.md` et l'inventaire des licences des bibliothèques compilées (`LICENCES-DEPENDANCES.md`, généré par `cargo about` ; `about.toml` fixe les licences acceptées). Un tag produit un **brouillon** de release, publié à la main après relecture.
+- *(v0.1.x.)* Les archives de la CLI n'embarquent aucun sidecar. Elles joignent `LICENSE`, `THIRD_PARTY_LICENSES.md` et l'inventaire des licences des bibliothèques compilées (`LICENCES-DEPENDANCES.md`, généré par `cargo about` ; `about.toml` fixe les licences acceptées). Un tag produit un **brouillon** de release, publié à la main après relecture.
 
 ### 5.5 Stratégie de test
 

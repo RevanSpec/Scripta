@@ -3,7 +3,7 @@
 Scripta est distribué sous [GPLv3](LICENSE). Ce document recense les
 composants tiers et leurs conditions.
 
-> **Portée actuelle.** Depuis la v0.1.0, la CLI est distribuée en binaire.
+> **Portée actuelle.** Depuis la v0.1.1, la CLI est distribuée en binaire.
 > Ses archives n'embarquent **ni yt-dlp ni ffmpeg**, invoqués comme programmes
 > externes et installés séparément par l'utilisateur : les obligations
 > attachées à leur redistribution ne s'appliqueront qu'aux bundles de

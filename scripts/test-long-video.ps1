@@ -131,7 +131,9 @@ if ($env:OS -eq "Windows_NT") {
 # après un `git pull`, un exécutable déjà là est périmé et la mesure porterait
 # sur l'ancien code. Cargo est incrémental.
 Write-Host "  Compilation en $Profile (immédiate si rien n'a changé)..."
-if ($Profile -eq "release") { cargo build --release --workspace } else { cargo build --workspace }
+# La CLI seule : l'application de bureau n'est pas mesurée ici, et `cargo tauri`
+# la construit avec son frontend.
+if ($Profile -eq "release") { cargo build --release -p scripta-cli } else { cargo build -p scripta-cli }
 if ($LASTEXITCODE -ne 0) { throw "La compilation a échoué." }
 
 $Exe = Join-Path $Root "target\$Profile\scripta.exe"
@@ -259,7 +261,9 @@ Write-Host "  En cours... (Ctrl-C interrompt proprement, et c'est aussi un test)
 
 $Json = Join-Path $OutDir "run.json"
 $ErrLog = Join-Path $OutDir "stderr.log"
-$cliArgs = @("-m", $Model, "-f", "json", "-o", $Json) + $langArgs + @("--", $Url)
+# --no-cache : la vidéo de référence est en cache dès la première passe, et une
+# seconde passe resservirait l'ancien résultat sans rien mesurer.
+$cliArgs = @("-m", $Model, "-f", "json", "-o", $Json, "--no-cache") + $langArgs + @("--", $Url)
 
 $p = Start-Process -FilePath $Exe -ArgumentList $cliArgs -PassThru -NoNewWindow `
                    -RedirectStandardError $ErrLog
