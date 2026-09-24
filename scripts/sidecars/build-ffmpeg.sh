@@ -42,8 +42,10 @@ esac
 # Exactement ce qu'exige la commande de crates/core/src/audio.rs :
 #   ffmpeg -nostdin -i pipe:0 -vn -ar 16000 -ac 1 -c:a pcm_s16le -f s16le pipe:1
 # L'assembleur x86 est écarté : il exigerait nasm, pour un décodage audio qui
-# prend quelques secondes par heure.
-composants="--disable-everything --disable-autodetect --disable-network"
+# prend quelques secondes par heure. iconv aussi, que `--disable-autodetect`
+# laisse passer sous Linux parce que la glibc le fournit : il ne sert qu'à
+# convertir des sous-titres.
+composants="--disable-everything --disable-autodetect --disable-network --disable-iconv"
 composants="$composants --disable-doc --disable-debug --enable-small --disable-x86asm"
 composants="$composants --disable-ffplay --disable-ffprobe --disable-avdevice --disable-swscale"
 composants="$composants --enable-protocol=pipe,file"
