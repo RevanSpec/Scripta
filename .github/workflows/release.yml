@@ -1,10 +1,10 @@
 name: Release
 
-# Un tag `v*` construit la CLI sur les trois OS et prépare un **brouillon** de
-# release : la publication reste un geste humain, après relecture des notes et
-# des artefacts. Sans tag — PR qui modifie ce workflow, lancement manuel —, tout
-# est construit, contrôlé et empaqueté, mais rien n'est publié : c'est la
-# répétition générale.
+# Un tag `v*` construit la CLI et l'application de bureau sur les trois OS, et
+# prépare un **brouillon** de release : la publication reste un geste humain,
+# après relecture des notes et des artefacts. Sans tag — PR qui modifie ce
+# workflow ou l'empaquetage, lancement manuel —, tout est construit, contrôlé et
+# empaqueté, mais rien n'est publié : c'est la répétition générale.
 on:
   push:
     tags: ["v*"]
@@ -14,6 +14,8 @@ on:
       - "about.toml"
       - "about.hbs"
       - "docs/releases/**"
+      - "scripts/sidecars/**"
+      - "crates/desktop/tauri.bundle.conf.json"
   workflow_dispatch:
 
 permissions:
@@ -24,7 +26,7 @@ env:
 
 jobs:
   build:
-    name: ${{ matrix.target }}
+    name: CLI ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -155,10 +157,200 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # ------------------------------------------------ application de bureau ---
+
+  # Échantillons du test de fumée de ffmpeg, produits par un ffmpeg complet —
+  # celui d'Ubuntu — dans chaque forme que yt-dlp peut livrer.
+  echantillons:
+    name: Échantillons audio
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: ffmpeg complet
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Échantillons
+        run: sh scripts/sidecars/make-samples.sh echantillons
+      - uses: actions/upload-artifact@v4
+        with:
+          name: echantillons
+          path: echantillons/
+          if-no-files-found: error
+
+  # Sidecars embarqués — SPEC §5.4, tâches 4.1 et 4.2 : yt-dlp aux versions et
+  # empreintes épinglées, ffmpeg minimal compilé depuis ses sources vérifiées.
+  sidecars:
+    name: Sidecars ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          # Compilé depuis Linux par mingw-w64 : la chaîne MSVC ne sait pas
+          # bâtir ffmpeg, et un exécutable statique mingw n'exige rien de plus
+          # sur le poste.
+          - os: ubuntu-22.04
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: mingw-w64
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - name: yt-dlp
+        run: sh scripts/sidecars/fetch-ytdlp.sh ${{ matrix.target }} binaries
+
+      # L'archive source n'est conservée qu'une fois : la LGPL impose de la
+      # distribuer avec le binaire, et c'est la même pour les trois cibles.
+      - name: ffmpeg
+        env:
+          SCRIPTA_FFMPEG_SOURCES: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && format('{0}/sources', github.workspace) || '' }}
+        run: sh scripts/sidecars/build-ffmpeg.sh ${{ matrix.target }} binaries
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sidecars-${{ matrix.target }}
+          path: binaries/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          name: scripta-sources-ffmpeg
+          path: sources/*
+          if-no-files-found: error
+
+  bureau:
+    name: Bureau ${{ matrix.target }}
+    needs: [echantillons, sidecars]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: dmg
+    steps:
+      - uses: actions/checkout@v4
+
+      # WebKitGTK pour l'application, libfuse2 pour l'outil qui bâtit
+      # l'AppImage, lui-même livré en AppImage.
+      - name: Prérequis natifs (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libclang-dev \
+            libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev \
+            libfuse2 file
+
+      # Risque R9, comme pour la CLI. Runtime C dynamique ici : l'installeur
+      # s'appuie de toute façon sur WebView2, et Tauri n'est pas éprouvé en
+      # +crt-static.
+      - name: Optimisation MSVC (R9)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "CMAKE_C_FLAGS_RELEASE=/MD /O2 /Ob2 /DNDEBUG"   | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAKE_CXX_FLAGS_RELEASE=/MD /O2 /Ob2 /DNDEBUG" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: LIBCLANG_PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = "C:\Program Files\LLVM\bin"
+          if (Test-Path "$p\libclang.dll") {
+            "LIBCLANG_PATH=$p" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Cible macOS
+        if: runner.os == 'macOS'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
+
+      - name: Toolchain
+        run: rustup show
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/desktop/ui/package-lock.json
+      - name: Frontend
+        working-directory: crates/desktop/ui
+        run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sidecars-${{ matrix.target }}
+          path: crates/desktop/binaries
+      - uses: actions/download-artifact@v4
+        with:
+          name: echantillons
+          path: echantillons
+
+      # Sur sa propre plateforme, chaque ffmpeg décode les cinq échantillons
+      # par la commande même du cœur. C'est ici seulement que le binaire
+      # Windows, compilé depuis Linux, s'exécute pour la première fois.
+      - name: Test de fumée de ffmpeg
+        shell: bash
+        run: |
+          # Les artefacts perdent les droits d'exécution en route.
+          chmod +x crates/desktop/binaries/scripta-*
+          exe=""
+          [ "$RUNNER_OS" = Windows ] && exe=".exe"
+          sh scripts/sidecars/smoke-ffmpeg.sh "crates/desktop/binaries/scripta-ffmpeg-${{ matrix.target }}$exe" echantillons
+
+      - name: Outil d'inventaire des licences
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      # Inventaire propre à l'application, joint au bundle avec les notices de
+      # yt-dlp et de FFmpeg (tauri.bundle.conf.json).
+      - name: Licences des dépendances
+        run: >
+          cargo about generate --locked
+          --manifest-path crates/desktop/Cargo.toml -c about.toml
+          --target ${{ matrix.target }}
+          -o crates/desktop/LICENCES-DEPENDANCES.md about.hbs
+
+      # PowerShell partout : sous Windows, Git Bash convertirait en chemins les
+      # valeurs du contournement R9, qui commencent par `/`.
+      - name: Empaquetage
+        shell: pwsh
+        working-directory: crates/desktop
+        run: node ui/node_modules/@tauri-apps/cli/tauri.js build --ci --config tauri.bundle.conf.json --bundles ${{ matrix.bundles }}
+
+      - name: Installeurs
+        shell: bash
+        run: |
+          mkdir -p dist
+          find target/release/bundle -maxdepth 2 -type f \
+            \( -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' \) \
+            -exec cp {} dist/ \;
+          ls -l dist
+          [ -n "$(ls dist)" ]
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scripta-bureau-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
   publish:
     name: Brouillon de release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, bureau]
     runs-on: ubuntu-latest
     # Seul job à pouvoir écrire, et il n'emploie que des actions officielles.
     permissions:
@@ -166,9 +358,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `scripta-*` : archives de la CLI, installeurs, sources de FFmpeg. Les
+      # sidecars et les échantillons, intermédiaires, n'y entrent pas.
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: scripta-*
           merge-multiple: true
 
       - name: Sommes de contrôle

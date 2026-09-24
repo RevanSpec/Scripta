@@ -1,6 +1,6 @@
 # Scripta — Cahier des charges technique et fonctionnel
 
-**Version :** 2.3
+**Version :** 2.4
 **Statut :** Validé pour implémentation — ADR-001 révisé au Jalon 0, SF-04 précisé au Jalon 2
 **Révision précédente :** 1.0 (voir [Annexe C — Journal des corrections](#annexe-c--journal-des-corrections))
 
@@ -40,7 +40,7 @@ L'outil se décline sous deux formes bâties sur le même moteur :
 
 - **Licence du projet : GPLv3** — déjà actée (`LICENSE` à la racine du dépôt).
 - **Compatibilité amont :** `yt-dlp` (The Unlicense) et `whisper.cpp` / `whisper-rs` (MIT) sont compatibles sans réserve.
-- **FFmpeg :** distribué comme binaire séparé invoqué par sous-processus. Les builds GPL de FFmpeg sont « GPLv2 ou ultérieure », donc compatibles GPLv3. **Obligation :** embarquer les textes de licence de FFmpeg et de yt-dlp dans le bundle (`THIRD_PARTY_LICENSES.md`) et publier une offre de code source conforme.
+- **FFmpeg :** distribué comme binaire séparé invoqué par sous-processus. Les builds GPL de FFmpeg sont « GPLv2 ou ultérieure », donc compatibles GPLv3. **Obligation :** embarquer les textes de licence de FFmpeg et de yt-dlp dans le bundle (`THIRD_PARTY_LICENSES.md`) et publier une offre de code source conforme. *(J4 : l'application de bureau embarque une build **LGPL** minimale de FFmpeg, sans composant GPL, compilée depuis les sources publiées. Chaque installeur joint dans `licences/` les textes de licence de FFmpeg et de yt-dlp, la notice des composants qu'embarquent les exécutables de yt-dlp, et la fiche de construction de FFmpeg ; l'archive source de FFmpeg accompagne chaque release.)*
 - **⚠️ Incompatibilité connue :** la GPLv3 est incompatible avec les conditions de l'App Store d'Apple. La distribution macOS se fera exclusivement par `.dmg` signé et notarisé hors App Store.
 - **Conditions d'utilisation YouTube :** le téléchargement de contenu contrevient aux CGU de YouTube. Le `README.md` doit porter un avertissement explicite indiquant que l'outil est fourni à des fins d'usage personnel et licite, et que la responsabilité de l'usage incombe à l'utilisateur.
 
@@ -136,7 +136,8 @@ Scripta/
 │       ├── capabilities/       # permissions de la fenêtre : core:default seul
 │       ├── src/                # backend Rust (commandes IPC)
 │       ├── ui/                 # frontend TypeScript + Svelte
-│       └── binaries/           # sidecars par triplet cible (J4)
+│       └── binaries/           # sidecars par triplet cible, acquis ou compilés
+│                               # par scripts/sidecars/ — non versionnés
 ```
 
 > **Correction v1 :** `src-tauri/` était placé à la racine, à côté de `crates/`. Il devient `crates/desktop/` pour homogénéiser le workspace.
@@ -692,7 +693,7 @@ OPTIONS DE `run` :
 
 - **Aucun travail bloquant sur le thread principal.** Extraction et inférence s'exécutent sur un thread dédié (`tauri::async_runtime::spawn_blocking`) ; la progression et les segments remontent par événements Tauri. Un `whisper_full` appelé directement dans une commande IPC figerait la fenêtre pendant plusieurs minutes.
 - Le bouton **Annuler** arme le drapeau lu par l'`abort_callback` et tue les sidecars ; il doit rester réactif pendant l'inférence.
-- Les sidecars sont déclarés en `externalBin` dans `tauri.conf.json`. **Rappel Tauri : les fichiers doivent porter le suffixe du triplet cible** (`yt-dlp-x86_64-pc-windows-msvc.exe`, `ffmpeg-aarch64-apple-darwin`, …), faute de quoi le bundle échoue silencieusement à embarquer le binaire.
+- Les sidecars sont déclarés en `externalBin` dans `tauri.conf.json`. **Rappel Tauri : les fichiers doivent porter le suffixe du triplet cible** (`yt-dlp-x86_64-pc-windows-msvc.exe`, `ffmpeg-aarch64-apple-darwin`, …), faute de quoi le bundle échoue silencieusement à embarquer le binaire. *(J4 : dans `tauri.bundle.conf.json`, que seul l'empaquetage passe à `cargo tauri build --config` ; `cargo tauri dev` et la CI n'ont ainsi pas à acquérir les sidecars. Noms préfixés, `scripta-yt-dlp-<triplet>` : un `.deb` installe les sidecars dans `/usr/bin`, où `/usr/bin/ffmpeg` appartient déjà au paquet de la distribution. Le cœur cherche la copie embarquée sous ce nom d'abord, puis sous le nom nu.)*
 - L'accélération affichée est celle **de la compilation** (`Backend::compiled()`) : conformément à [ADR-001](#adr-001--stratégie-daccélération-matérielle) révisé, aucun artefact ne découvre un GPU à l'exécution. *(Corrigé en v2.2 : cette ligne annonçait encore l'énumération à l'exécution de la v2.0.)*
 - Les segments s'affichent au fil de leur émission ; la zone de sortie suit automatiquement, sauf si l'utilisateur a fait défiler manuellement.
 
@@ -813,9 +814,9 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 | macOS | binaire universel | `.dmg` signé et notarisé |
 
 - Les sidecars `yt-dlp` et `ffmpeg` sont embarqués dans les bundles GUI. Pour la CLI, ils sont **recherchés sur le système puis téléchargés à la demande** dans `<data_dir>/scripta/bin/` — embarquer 70 Mo de FFmpeg dans un binaire CLI contredirait l'objectif de légèreté.
-- **Build FFmpeg minimal** : seuls les décodeurs (`opus`, `vorbis`, `aac`, `mp3`), démultiplexeurs (`matroska`, `mov`, `mp3`) et le rééchantillonneur sont nécessaires. Une build ciblée descend autour de 10–15 Mo, contre 60–70 Mo pour une build complète.
+- **Build FFmpeg minimal** : seuls les décodeurs (`opus`, `vorbis`, `aac`, `mp3`), démultiplexeurs (`matroska`, `mov`, `mp3`) et le rééchantillonneur sont nécessaires. Une build ciblée descend autour de 10–15 Mo, contre 60–70 Mo pour une build complète. *(Mesuré au J4 : FFmpeg 9.0.2 statique, sous LGPL, sans bibliothèque externe — **3,2 Mo** sous Linux, **1,9 Mo** sous Windows et macOS. S'y ajoutent les démultiplexeurs `ogg`, `aac` et `wav`, par prudence. Sur sa propre plateforme, chaque binaire décode cinq échantillons — Opus, Vorbis, AAC, MP3, MP4 avec image — par la commande même du cœur. Construction : `scripts/sidecars/build-ffmpeg.sh` ; Windows se compile depuis Linux par mingw-w64.)*
 - Sur macOS, **tous** les binaires du bundle — application et sidecars — doivent être signés et notarisés ensemble, avec les droits d'exécution appropriés.
-- Chaque release publie un fichier de sommes de contrôle et la liste des versions de sidecars embarquées.
+- Chaque release publie un fichier de sommes de contrôle et la liste des versions de sidecars embarquées. *(J4 : versions et empreintes dans `scripts/sidecars/versions.env`, qui refuse tout fichier ne portant pas la sienne ; fiche de construction de FFmpeg dans chaque installeur.)*
 - *(v0.1.x.)* Les archives de la CLI n'embarquent aucun sidecar. Elles joignent `LICENSE`, `THIRD_PARTY_LICENSES.md` et l'inventaire des licences des bibliothèques compilées (`LICENCES-DEPENDANCES.md`, généré par `cargo about` ; `about.toml` fixe les licences acceptées). Un tag produit un **brouillon** de release, publié à la main après relecture.
 
 ### 5.5 Stratégie de test
@@ -879,6 +880,8 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 
 ## Annexe C — Journal des corrections
 
+**v2.4** — Jalon 4, premier lot : sidecars embarqués dans l'application de bureau, build FFmpeg minimale mesurée (§5.4, Annexe D), déclaration `externalBin` propre au bundle et noms préfixés (§4.2), obligations de licence mises en œuvre (§1.3) ; hypothèse sur les rappels de whisper-rs précisée (Annexe D).
+
 **v2.3** — Retours du Jalon 3 : orchestration déplacée dans `core::pipeline`, commune aux deux interfaces (§2.1) ; sonde annulable (SF-01) ; mise en œuvre de la GUI décrite (§4.2) : canal par appel et relais regroupant les messages, tâche unique, export et presse-papiers côté Rust, messages d'erreur propres à l'interface ; résolution des sidecars sans `PATH` mise en œuvre (§5.1).
 
 **v2.2** — Retours du Jalon 2 : VAD orchestré par Scripta et motifs de l'écart, détection sur un thread, contexte glissant coupé en mode VAD, limite de `--initial-prompt` (SF-04, ADR-003, Annexe D) ; seuils `no_speech_thold` / `entropy_thold` exposés ; clé de cache complétée (SF-08) ; `--backend` retiré et §4.2 aligné sur ADR-001 révisé ; `--force`, `--model-path`, `--vad-model`, chemins de sidecars ajoutés au §4.1 ; mises en œuvre de SF-06 et du diagnostic SF-07 décrites ; écart assumé sur `--threads` ; mesure mémoire de référence corrigée (1 040 Mo).
@@ -895,11 +898,11 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 
 | Hypothèse | État | Constat |
 |---|---|---|
-| `whisper-rs` expose `abort_callback` | ✅ **Confirmée** | `set_abort_callback_safe`, ainsi que `set_progress_callback_safe` et `set_segment_callback_safe` |
+| `whisper-rs` expose `abort_callback` | ✅ **Confirmée — par l'API brute** (J2, J3) | Les trois rappels existent, mais leurs versions « sûres » ne le sont pas en 0.16.0 : `set_abort_callback_safe` confond les types, `set_progress_callback_safe` et `set_segment_callback_safe` fuient leur fermeture à chaque inférence. Scripta passe par des trampolines prêtés le temps de l'appel (`crates/core/src/transcribe.rs`) |
 | Chargement dynamique des backends ggml | ❌ **Invalidée** | Non exposé : sélection par feature Cargo, liaison statique. Repli appliqué — voir [ADR-001](#adr-001--stratégie-daccélération-matérielle) |
 | VAD Silero accessible depuis `whisper-rs` | ✅ **Confirmée — mais pas par la voie prévue** (J2) | La détection (`WhisperVadContext`) fonctionne. En revanche `enable_vad` est sans effet via whisper-rs : `WhisperState::full` appelle `whisper_full_with_state`, qui ignore `params.vad`. Et la voie `whisper_full` laisse les tokens dans la chronologie compactée. VAD orchestré par Scripta — voir [SF-04](#sf-04--moteur-de-transcription-locale) |
 | Vulkan atteint les seuils du [§5.2](#52-performance) | ⏳ **Reportée au J4** | Aucune machine GPU disponible. À mesurer quand la variante Vulkan sera construite ([Jalon 4](ROADMAP.md#jalon-4--packaging-et-cicd)). Repli : les seuils GPU restent indicatifs, le CPU tient les siens |
-| Build FFmpeg minimale ≤ 15 Mo | ⏳ **Reportée au J4** | Tâche 4.2. Repli : accepter la taille d'une build standard et la documenter |
+| Build FFmpeg minimale ≤ 15 Mo | ✅ **Confirmée** (J4) | 3,2 Mo sous Linux, 1,9 Mo sous Windows et macOS, contre 60 à 145 Mo pour une build complète. Voir [§5.4](#54-distribution-et-packaging) |
 
 ## Annexe E — Prérequis de compilation
 
