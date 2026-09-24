@@ -41,7 +41,7 @@ L'outil se décline sous deux formes bâties sur le même moteur :
 - **Licence du projet : GPLv3** — déjà actée (`LICENSE` à la racine du dépôt).
 - **Compatibilité amont :** `yt-dlp` (The Unlicense) et `whisper.cpp` / `whisper-rs` (MIT) sont compatibles sans réserve.
 - **FFmpeg :** distribué comme binaire séparé invoqué par sous-processus. Les builds GPL de FFmpeg sont « GPLv2 ou ultérieure », donc compatibles GPLv3. **Obligation :** embarquer les textes de licence de FFmpeg et de yt-dlp dans le bundle (`THIRD_PARTY_LICENSES.md`) et publier une offre de code source conforme. *(J4 : l'application de bureau embarque une build **LGPL** minimale de FFmpeg, sans composant GPL, compilée depuis les sources publiées. Chaque installeur joint dans `licences/` les textes de licence de FFmpeg et de yt-dlp, la notice des composants qu'embarquent les exécutables de yt-dlp, et la fiche de construction de FFmpeg ; l'archive source de FFmpeg accompagne chaque release.)*
-- **⚠️ Incompatibilité connue :** la GPLv3 est incompatible avec les conditions de l'App Store d'Apple. La distribution macOS se fera exclusivement par `.dmg` signé et notarisé hors App Store.
+- **⚠️ Incompatibilité connue :** la GPLv3 est incompatible avec les conditions de l'App Store d'Apple. La distribution macOS se fait exclusivement par `.dmg`, hors App Store — non signé, voir [§5.4](#54-distribution-et-packaging).
 - **Conditions d'utilisation YouTube :** le téléchargement de contenu contrevient aux CGU de YouTube. Le `README.md` doit porter un avertissement explicite indiquant que l'outil est fourni à des fins d'usage personnel et licite, et que la responsabilité de l'usage incombe à l'utilisateur.
 
 ### 1.4 Nommage et conventions
@@ -248,10 +248,16 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
 
 | | Chemin |
 |---|---|
-| Sidecar embarqué (lecture seule, signé) | à l'intérieur du bundle applicatif |
+| Sidecar embarqué (lecture seule) | à l'intérieur du bundle applicatif |
 | Sidecar mis à jour (inscriptible) | `<data_dir>/scripta/bin/` |
 
 `core::sidecar::resolve()` retourne la copie utilisateur si elle existe **et** que sa version est supérieure, sinon la copie embarquée. La mise à jour ([SF-06](#sf-06--maintenance-du-sidecar-yt-dlp)) télécharge toujours vers l'emplacement inscriptible ; le bundle signé n'est jamais modifié.
+
+> **Sans signature (décision du 2026-09-24).** Les bundles ne sont pas signés,
+> mais la décision tient pour la seconde raison : l'emplacement d'installation
+> n'est pas inscriptible sans élévation — `Program Files` pour une
+> installation par machine, `/usr/bin` pour un `.deb`, `/Applications` pour un
+> compte non administrateur.
 
 ---
 
@@ -811,11 +817,11 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 |---|---|---|
 | Linux | tarball `.tar.gz` | AppImage + `.deb` |
 | Windows | `.exe` autonome | installeur NSIS |
-| macOS | binaire universel | `.dmg` signé et notarisé |
+| macOS | binaire universel | `.dmg` non signé |
 
 - Les sidecars `yt-dlp` et `ffmpeg` sont embarqués dans les bundles GUI. Pour la CLI, ils sont **recherchés sur le système puis téléchargés à la demande** dans `<data_dir>/scripta/bin/` — embarquer 70 Mo de FFmpeg dans un binaire CLI contredirait l'objectif de légèreté.
 - **Build FFmpeg minimal** : seuls les décodeurs (`opus`, `vorbis`, `aac`, `mp3`), démultiplexeurs (`matroska`, `mov`, `mp3`) et le rééchantillonneur sont nécessaires. Une build ciblée descend autour de 10–15 Mo, contre 60–70 Mo pour une build complète. *(Mesuré au J4 : FFmpeg 9.0.2 statique, sous LGPL, sans bibliothèque externe — **3,2 Mo** sous Linux, **1,9 Mo** sous Windows et macOS. S'y ajoutent les démultiplexeurs `ogg`, `aac` et `wav`, par prudence. Sur sa propre plateforme, chaque binaire décode cinq échantillons — Opus, Vorbis, AAC, MP3, MP4 avec image — par la commande même du cœur. Construction : `scripts/sidecars/build-ffmpeg.sh` ; Windows se compile depuis Linux par mingw-w64.)*
-- Sur macOS, **tous** les binaires du bundle — application et sidecars — doivent être signés et notarisés ensemble, avec les droits d'exécution appropriés.
+- ~~Sur macOS, **tous** les binaires du bundle — application et sidecars — doivent être signés et notarisés ensemble, avec les droits d'exécution appropriés.~~ **Aucune signature** (décision du 2026-09-24) : ni Developer ID ni notarisation sous macOS, ni Authenticode sous Windows. Gatekeeper et SmartScreen avertissent au premier lancement ; le README donne la marche à suivre. Sur Apple Silicon, chaque binaire garde la signature *ad hoc* que lui appose l'éditeur de liens — sans elle, macOS refuserait de l'exécuter —, ce qui n'engage aucun compte ni certificat.
 - Chaque release publie un fichier de sommes de contrôle et la liste des versions de sidecars embarquées. *(J4 : versions et empreintes dans `scripts/sidecars/versions.env`, qui refuse tout fichier ne portant pas la sienne ; fiche de construction de FFmpeg dans chaque installeur.)*
 - *(v0.1.x.)* Les archives de la CLI n'embarquent aucun sidecar. Elles joignent `LICENSE`, `THIRD_PARTY_LICENSES.md` et l'inventaire des licences des bibliothèques compilées (`LICENCES-DEPENDANCES.md`, généré par `cargo about` ; `about.toml` fixe les licences acceptées). Un tag produit un **brouillon** de release, publié à la main après relecture.
 
@@ -880,7 +886,7 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 
 ## Annexe C — Journal des corrections
 
-**v2.4** — Jalon 4, premier lot : sidecars embarqués dans l'application de bureau, build FFmpeg minimale mesurée (§5.4, Annexe D), déclaration `externalBin` propre au bundle et noms préfixés (§4.2), obligations de licence mises en œuvre (§1.3) ; hypothèse sur les rappels de whisper-rs précisée (Annexe D).
+**v2.4** — Jalon 4, premier lot : sidecars embarqués dans l'application de bureau, build FFmpeg minimale mesurée (§5.4, Annexe D), déclaration `externalBin` propre au bundle et noms préfixés (§4.2), obligations de licence mises en œuvre (§1.3) ; hypothèse sur les rappels de whisper-rs précisée (Annexe D) ; signature abandonnée (§1.3, §5.4, ADR-004 — décision du 2026-09-24).
 
 **v2.3** — Retours du Jalon 3 : orchestration déplacée dans `core::pipeline`, commune aux deux interfaces (§2.1) ; sonde annulable (SF-01) ; mise en œuvre de la GUI décrite (§4.2) : canal par appel et relais regroupant les messages, tâche unique, export et presse-papiers côté Rust, messages d'erreur propres à l'interface ; résolution des sidecars sans `PATH` mise en œuvre (§5.1).
 

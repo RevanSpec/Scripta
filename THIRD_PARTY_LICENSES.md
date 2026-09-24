@@ -101,5 +101,5 @@ autre licence fait échouer la génération, donc la release.
 ## Incompatibilité connue
 
 La **GPLv3 est incompatible avec les conditions de l'App Store d'Apple**. La
-distribution macOS se fera exclusivement par `.dmg` signé et notarisé, hors
+distribution macOS se fait exclusivement par `.dmg`, non signé, hors
 App Store — voir [SPEC §1.3](docs/SPEC.md#13-licence-et-conformité).

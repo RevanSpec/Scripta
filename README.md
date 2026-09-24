@@ -75,7 +75,7 @@ Scripta invoque **yt-dlp** et **ffmpeg** sans les embarquer : installez-les
 séparément (commandes ci-dessous), placez `scripta` dans votre `PATH`, puis
 vérifiez avec `scripta doctor`.
 
-> **macOS** : le binaire n'est pas encore signé. Téléchargé par un navigateur,
+> **macOS** : le binaire n'est pas signé. Téléchargé par un navigateur,
 > il est bloqué par Gatekeeper ; retirez l'attribut de quarantaine avec
 > `xattr -d com.apple.quarantine scripta`.
 
@@ -151,8 +151,10 @@ Tauri v2 et Svelte. Les releases à venir joignent ses installeurs — NSIS sous
 Windows, AppImage et `.deb` sous Linux, `.dmg` sous macOS. Ils embarquent
 yt-dlp et une build minimale de ffmpeg : rien d'autre à installer.
 
-> **Installeurs non signés.** Windows affiche un avertissement SmartScreen ;
-> sous macOS, retirez l'attribut de quarantaine après installation :
+> **Installeurs non signés**, et ils ne le seront pas. Au premier lancement,
+> Windows affiche l'écran SmartScreen « Windows a protégé votre ordinateur » :
+> *Informations complémentaires*, puis *Exécuter quand même*. Sous macOS,
+> retirez l'attribut de quarantaine après installation :
 > `xattr -dr com.apple.quarantine /Applications/Scripta.app`.
 
 Depuis les sources, il faut en plus des prérequis ci-dessus **Node.js** 20 ou
@@ -269,8 +271,8 @@ scripta update-extractor
 
 Le binaire est téléchargé depuis les *releases* de yt-dlp, vérifié par
 SHA-256, et installé dans un **répertoire utilisateur** — jamais dans le
-bundle applicatif. Y écrire invaliderait sa signature, et sur Apple Silicon
-l'application ne se lancerait plus (ADR-004). `scripta doctor` indique la
+bundle applicatif, dont l'emplacement n'est pas inscriptible sans élévation
+(ADR-004). `scripta doctor` indique la
 provenance du binaire retenu : `mis à jour`, `embarqué` ou `système`.
 
 Scripta vérifie **au plus une fois par jour** qu'une version plus récente

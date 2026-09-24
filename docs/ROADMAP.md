@@ -313,14 +313,19 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 >
 > Restent :
 >
-> - la signature et la notarisation macOS (4.4), le binaire universel ;
-> - la signature de l'installeur Windows, que SmartScreen signale sans elle ;
+> - le binaire universel de la CLI sous macOS (4.4) ;
 > - les variantes Vulkan (4.3) ;
 > - la tâche quotidienne (4.7) et le banc de performance en CI (4.8) ;
 > - la glibc 2.31 visée par le §5.3 : la CLI exige la 2.34, relevée sur
 >   le binaire construit sous Ubuntu 22.04.
+>
+> **Pas de signature** (décision du 2026-09-24) : ni Developer ID ni
+> notarisation sous macOS, ni Authenticode sous Windows. Les installeurs le
+> resteront ; SmartScreen et Gatekeeper avertissent au premier lancement, et
+> le README donne la marche à suivre. Sans objet désormais : l'adhésion au
+> Apple Developer Program, les certificats et leurs secrets en CI.
 
-**Objectif :** un `git tag` produit des artefacts installables et signés pour les trois plateformes.
+**Objectif :** un `git tag` produit des artefacts installables ~~et signés~~ pour les trois plateformes.
 
 **Effort :** 5–8 jours. **Prérequis :** J2 pour la CLI ; J3 pour la GUI. *Peut démarrer partiellement en parallèle du J3.*
 
@@ -331,7 +336,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 | **4.1** | Script d'acquisition des sidecars par triplet cible (yt-dlp + ffmpeg), avec **vérification d'intégrité** | [§5.4](SPEC.md#54-distribution-et-packaging) |
 | **4.2** | **Build FFmpeg minimale** (décodeurs et démultiplexeurs strictement nécessaires) ou sélection d'une source de builds réduites | [§5.4](SPEC.md#54-distribution-et-packaging) |
 | **4.3** | Matrice GitHub Actions : 3 OS × {CLI, GUI}, plus la variante Vulkan sous Windows et Linux ([ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) révisé). Contournement R9 dans chaque job Windows | [§5.4](SPEC.md#54-distribution-et-packaging) |
-| **4.4** | **Signature et notarisation macOS** de l'application **et de tous les sidecars**, binaire universel pour la CLI | [§5.4](SPEC.md#54-distribution-et-packaging), [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour) |
+| **4.4** | ~~**Signature et notarisation macOS** de l'application **et de tous les sidecars**~~ — abandonnées (décision du 2026-09-24) —, binaire universel pour la CLI | [§5.4](SPEC.md#54-distribution-et-packaging), [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour) |
 | **4.5** | Installeurs : NSIS (Windows), AppImage + `.deb` (Linux), `.dmg` (macOS) | [§5.4](SPEC.md#54-distribution-et-packaging) |
 | **4.6** | Workflow de release : sommes de contrôle, notes de version, inventaire des versions de sidecars embarquées | [§5.4](SPEC.md#54-distribution-et-packaging) |
 | **4.7** | **Tâche planifiée quotidienne** : transcription d'une vidéo de référence, alerte en cas de rupture d'extracteur | [§5.5](SPEC.md#55-stratégie-de-test) |
@@ -340,8 +345,8 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 ### Critères de sortie
 
 - [ ] Un tag produit les artefacts de la matrice [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) révisée — CLI et GUI sur les trois OS, et leur variante Vulkan sous Windows et Linux —, publiés avec leurs sommes de contrôle.
-- [ ] Le `.dmg` s'installe et se lance sur un **Mac vierge** (Apple Silicon), sans avertissement Gatekeeper.
-- [ ] `update-extractor` fonctionne sur l'application **installée et signée** des trois plateformes — c'est le test qui valide [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), et il **ne peut pas** être fait en mode développement.
+- [ ] Le `.dmg` s'installe et se lance sur un **Mac vierge** (Apple Silicon), ~~sans avertissement Gatekeeper~~ par la procédure du README : sans signature, Gatekeeper avertit.
+- [ ] `update-extractor` fonctionne sur l'application **installée** ~~et signée~~ des trois plateformes — c'est le test qui valide [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), et il **ne peut pas** être fait en mode développement.
 - [ ] La CLI démarre sur une machine **sans GPU ni driver** (validation de [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle)).
 - [ ] La tâche quotidienne s'exécute et alerte correctement.
 
@@ -349,11 +354,11 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 | Risque | Probabilité | Mitigation |
 |---|---|---|
-| **Notarisation macOS** — sidecars non signés, droits manquants, chemins d'exécution | **Élevée** | Commencer par un `.dmg` de test **dès le début du J4**, pas à la fin. C'est le poste qui déborde systématiquement |
+| **Notarisation macOS** — sidecars non signés, droits manquants, chemins d'exécution | **Sans objet** | Pas de signature (décision du 2026-09-24) |
 | Taille des artefacts GUI (FFmpeg) | Moyenne | Tâche 4.2 ; à défaut, accepter et documenter |
-| Secrets de signature en CI (certificat Apple, mots de passe) | Moyenne | Provisionner les comptes et certificats **pendant le J3**, le délai administratif Apple n'est pas compressible |
+| Secrets de signature en CI (certificat Apple, mots de passe) | **Sans objet** | Pas de signature |
 
-> **Alerte de séquencement.** L'adhésion au Apple Developer Program et l'émission des certificats prennent des jours ouvrés. À initier au plus tard au début du Jalon 3.
+> ~~**Alerte de séquencement.** L'adhésion au Apple Developer Program et l'émission des certificats prennent des jours ouvrés. À initier au plus tard au début du Jalon 3.~~ Sans objet : pas de signature.
 
 ---
 
@@ -397,7 +402,7 @@ Aucune de ces tâches ne conditionne la v1.0.
 | # | Risque | Impact | Prob. | Jalon | Mitigation |
 |---|---|---|---|---|---|
 | R1 | Build `whisper-rs` + GPU sous Windows | Élevé | **Réduite** | J0 → J4 | Le build natif CPU passe sur les trois OS en CI. Le build **Vulkan** n'a jamais été tenté : à éprouver au plus tard au J4, où la variante Vulkan devient un artefact. Repli : CPU seul sous Windows |
-| R2 | Notarisation macOS des sidecars | Élevé | Élevée | J4 | `.dmg` de test en **début** de J4 ; certificats provisionnés dès le J3 |
+| R2 | Notarisation macOS des sidecars | Élevé | **Sans objet** | J4 | Pas de signature (décision du 2026-09-24). Reste l'avertissement de Gatekeeper au premier lancement, que le README apprend à lever |
 | R3 | **YouTube casse les extracteurs** | Élevé | **Certaine** *(question de quand, pas de si)* | Continu | [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) + tâche quotidienne 4.7 + [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour). **C'est la raison d'être de ces trois éléments** |
 | R4 | Vérification anti-robot bloquant les utilisateurs | Moyen | Élevée | J2 | Diagnostic explicite (code 12) + `--cookies-from-browser` documenté |
 | R5 | Chargement dynamique des backends non supporté | Moyen | Moyenne | J0 | Repli deux artefacts (+2 j sur le J4) |
