@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/cli"]
+members = ["crates/core", "crates/cli", "crates/desktop"]
+# `cargo build` sans `-p` ne bâtit que le cœur et la CLI : l'application de
+# bureau exige WebKitGTK sous Linux et se construit par `cargo tauri`, qui
+# embarque son frontend. `--workspace` (CI) ou `-p scripta-desktop` l'incluent.
+default-members = ["crates/core", "crates/cli"]
 
 [workspace.package]
 version = "0.1.0"

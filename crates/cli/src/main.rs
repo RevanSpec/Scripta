@@ -205,6 +205,10 @@ struct RunArgs {
     entropy_thold: Option<f32>,
 
     /// Nombre de threads d'inférence.
+    ///
+    /// Défaut : les cœurs physiques, en laissant au moins deux threads
+    /// logiques libres. Au-delà, le débit chute, et s'effondre dès qu'une
+    /// autre application occupe un cœur.
     #[arg(short, long)]
     threads: Option<usize>,
 

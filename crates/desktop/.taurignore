@@ -1,0 +1,9 @@
+# Fichiers que `cargo tauri dev` ne doit pas surveiller : le frontend a son
+# propre serveur (Vite), et tauri-build régénère gen/ à chaque compilation —
+# les surveiller relancerait la compilation en boucle.
+#
+# ui/package.json reste visible : c'est par lui que Tauri repère le dossier
+# du frontend, où s'exécutent beforeDevCommand et beforeBuildCommand.
+ui/*
+!ui/package.json
+gen/

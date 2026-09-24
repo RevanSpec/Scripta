@@ -1,3 +1,9 @@
 /target
 **/*.rs.bk
 Cargo.lock.orig
+
+# Application de bureau : dépendances et build du frontend, schémas que
+# tauri-build régénère à chaque compilation.
+crates/desktop/ui/node_modules/
+crates/desktop/ui/dist/
+crates/desktop/gen/

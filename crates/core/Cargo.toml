@@ -27,6 +27,9 @@ whisper-rs = { version = "=0.16.0", features = ["raw-api"] }
 ureq.workspace = true
 sha2.workspace = true
 directories.workspace = true
+# Cœurs physiques, que la bibliothèque standard ne sait pas compter : le
+# nombre de threads d'inférence par défaut en dépend (voir `default_threads`).
+num_cpus = "1"
 
 # Fixture de test : sidecar simulé (yt-dlp / ffmpeg), configuré par son nom de
 # fichier. Déclaré en binaire du paquet pour que `cargo test` expose
