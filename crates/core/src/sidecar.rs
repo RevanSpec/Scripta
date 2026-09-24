@@ -121,34 +121,38 @@ pub fn resolve(kind: Kind, explicit: Option<&Path>) -> Resolved {
         };
     }
 
+    // Repli sur le `PATH`. Le chemin n'est pas résolu ici : `Command` s'en
+    // charge, et un échec remonte en `SidecarMissing` au moment du lancement.
+    resolve_installed(kind).unwrap_or_else(|| Resolved {
+        path: PathBuf::from(kind.name()),
+        origin: Origin::System,
+    })
+}
+
+/// Résout un sidecar **sans jamais consulter le `PATH`** — SPEC §5.1.
+///
+/// C'est la règle du contexte GUI : un binaire homonyme placé en amont du
+/// `PATH` y détournerait l'extraction à l'insu de l'utilisateur, qui ne voit
+/// aucune ligne de commande. Seules comptent la copie mise à jour, puis la
+/// copie embarquée.
+pub fn resolve_installed(kind: Kind) -> Option<Resolved> {
     let fichier = kind.file_name();
 
     if let Ok(dir) = bin_dir() {
         let p = dir.join(&fichier);
         if p.is_file() {
-            return Resolved {
+            return Some(Resolved {
                 path: p,
                 origin: Origin::User,
-            };
+            });
         }
     }
 
-    if let Some(dir) = bundled_dir() {
-        let p = dir.join(&fichier);
-        if p.is_file() {
-            return Resolved {
-                path: p,
-                origin: Origin::Bundled,
-            };
-        }
-    }
-
-    // Repli sur le `PATH`. Le chemin n'est pas résolu ici : `Command` s'en
-    // charge, et un échec remonte en `SidecarMissing` au moment du lancement.
-    Resolved {
-        path: PathBuf::from(kind.name()),
-        origin: Origin::System,
-    }
+    let p = bundled_dir()?.join(&fichier);
+    p.is_file().then_some(Resolved {
+        path: p,
+        origin: Origin::Bundled,
+    })
 }
 
 /// Version rapportée par le binaire, ou `None` s'il est injoignable.
@@ -488,6 +492,18 @@ mod tests {
             r.origin,
             Origin::System | Origin::User | Origin::Bundled
         ));
+    }
+
+    #[test]
+    fn la_resolution_installee_ignore_le_path() {
+        // Quel que soit le poste : jamais un nom nu, que `Command` chercherait
+        // dans des répertoires que l'utilisateur ne contrôle pas.
+        for kind in [Kind::YtDlp, Kind::Ffmpeg] {
+            if let Some(r) = resolve_installed(kind) {
+                assert!(matches!(r.origin, Origin::User | Origin::Bundled));
+                assert!(r.path.is_absolute(), "{}", r.path.display());
+            }
+        }
     }
 
     #[test]

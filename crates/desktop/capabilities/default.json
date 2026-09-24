@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions de la fenêtre principale : le socle de Tauri, rien d'autre. Export et presse-papiers passent par des commandes de l'application, qui ouvrent elles-mêmes la boîte d'enregistrement : l'interface n'accède ni au système de fichiers ni au presse-papiers.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

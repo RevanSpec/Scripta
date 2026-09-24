@@ -17,7 +17,8 @@ much all it is to say
 ## État du projet
 
 **La CLI est publiée** — v0.1.0, pour Windows, Linux et macOS Apple Silicon.
-L'application de bureau est en cours de développement.
+L'application de bureau fonctionne ; elle se lance depuis les sources, en
+attendant d'être empaquetée.
 
 | | État |
 |---|---|
@@ -32,7 +33,7 @@ L'application de bureau est en cours de développement.
 | Sous-titres YouTube officiels | ✅ |
 | Cache de transcriptions | ✅ |
 | Mise à jour de l'extracteur | ✅ |
-| Application de bureau | ⏳ |
+| Application de bureau | 🚧 fonctionnelle, non empaquetée |
 | Binaires précompilés (CLI) | ✅ v0.1.0 |
 
 Suivi détaillé dans [`docs/ROADMAP.md`](docs/ROADMAP.md).
@@ -143,6 +144,38 @@ scripta doctor
 `doctor` passe en revue les extracteurs et leurs versions, le backend compilé,
 les modèles présents, les droits d'écriture des répertoires et la joignabilité
 de YouTube, HuggingFace et GitHub. Sa dernière ligne dénombre les problèmes.
+
+### Application de bureau
+
+Tauri v2 et Svelte. Elle n'est pas encore empaquetée : elle se lance depuis les
+sources, avec, en plus des prérequis ci-dessus, **Node.js** 20 ou ultérieur et
+la CLI de Tauri.
+
+```bash
+cargo install tauri-cli --locked
+cd crates/desktop/ui && npm ci && cd ..
+cargo tauri dev
+```
+
+Sous Linux, le moteur de rendu demande en outre :
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+> **En développement, l'inférence est lente** — une cinquantaine de fois :
+> `cargo tauri dev` compile whisper.cpp sans optimisation. Pour transcrire une
+> vraie vidéo, `cargo tauri build --no-bundle` produit l'application optimisée
+> dans `target/release/` (sous Windows, avec les deux variables ci-dessus).
+>
+> Cette build ne cherche jamais yt-dlp ni ffmpeg dans le `PATH`
+> ([SPEC §5.1](docs/SPEC.md#51-sécurité)) : placez-les à côté de l'exécutable.
+> Le bouton « Mettre à jour yt-dlp » installe ce dernier dans le répertoire de
+> Scripta, où il est aussi trouvé.
+
+`cargo build`, sans `-p`, ne construit que le cœur et la CLI : l'application
+exige WebKitGTK sous Linux et se construit par `cargo tauri`, qui embarque son
+frontend.
 
 ### Accélération matérielle
 
@@ -296,7 +329,7 @@ ponctuation) et traduction automatique (deux passages machine cumulés).
 | `--max-line-width <N>` | largeur des lignes de sous-titres (défaut 42) |
 | `--max-line-count <N>` | lignes par sous-titre (défaut 2) |
 | `--max-duration <MIN>` | refus au-delà (défaut 240) |
-| `-t, --threads <N>` | threads d'inférence |
+| `-t, --threads <N>` | threads d'inférence ; par défaut les cœurs physiques, deux threads logiques restant libres |
 | `--force` | écrase le fichier de sortie s'il existe |
 | `-q, --quiet` | supprime la progression |
 | `-v, --verbose` | chemins résolus, clé de cache, journaux de whisper.cpp |
@@ -391,9 +424,13 @@ Scripta Desktop ┘                └─► whisper-rs        (inférence local
 ```
 
 - [`crates/core`](crates/core) — validation d'URL, sonde de métadonnées,
-  pipeline audio, inférence, formateurs, taxonomie d'erreurs. Aucune dépendance
-  à une couche de présentation.
+  pipeline audio, inférence, formateurs, taxonomie d'erreurs, et
+  l'enchaînement de tout cela (`pipeline`). Aucune dépendance à une couche de
+  présentation.
 - [`crates/cli`](crates/cli) — le binaire `scripta`.
+- [`crates/desktop`](crates/desktop) — l'application de bureau, Tauri v2 et
+  Svelte. Elle reçoit les mêmes événements que la CLI : les deux interfaces ne
+  diffèrent que par leur façon de les rendre.
 
 L'audio transite exclusivement par des **pipes anonymes** : rien n'est écrit sur
 le disque, ce qui évite l'usure et l'attente d'E/S. Les deux sous-processus sont

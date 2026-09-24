@@ -1,0 +1,197 @@
+/* Palette sobre, contraste élevé : une transcription se lit longtemps. Le
+   thème suit celui du système. */
+:root {
+  --fond: #f6f7f9;
+  --panneau: #ffffff;
+  --bord: #d5d9e0;
+  --texte: #1c1f26;
+  --attenue: #5c6472;
+  --accent: #b86e0a;
+  --accent-texte: #ffffff;
+  --erreur: #b3261e;
+  --succes: #2e7d4f;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fond: #181a20;
+    --panneau: #21242c;
+    --bord: #353a46;
+    --texte: #e8ebf2;
+    --attenue: #9aa2b2;
+    --accent: #e8a848;
+    --accent-texte: #1a1408;
+    --erreur: #e27272;
+    --succes: #6cc08e;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fond);
+  color: var(--texte);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.app { max-width: 900px; margin: 0 auto; padding: 20px 20px 40px; }
+main[hidden] { display: none; }
+
+header { display: flex; align-items: center; gap: 18px; margin-bottom: 18px; flex-wrap: wrap; }
+h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: 0.01em; }
+h2 { font-size: 14px; margin: 18px 0 6px; font-weight: 600; }
+nav { display: flex; gap: 4px; }
+.etat { margin: 0 0 0 auto; color: var(--attenue); font-size: 12px; }
+
+.bandeau {
+  background: var(--panneau);
+  border: 1px solid var(--bord);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 0 0 16px;
+  font-size: 13px;
+}
+.erreur-texte { color: var(--erreur); }
+
+input, select {
+  background: var(--panneau);
+  color: var(--texte);
+  border: 1px solid var(--bord);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font: inherit;
+}
+input:focus-visible, select:focus-visible, button:focus-visible, .segments:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+input[type="checkbox"] { padding: 0; accent-color: var(--accent); }
+
+button {
+  background: var(--accent);
+  color: var(--accent-texte);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 7px 16px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.45; cursor: default; }
+button.secondaire, button.onglet, button.lien {
+  background: transparent;
+  color: var(--texte);
+  border-color: var(--bord);
+  font-weight: 500;
+}
+button.onglet { border-color: transparent; color: var(--attenue); padding: 5px 12px; }
+button.onglet.actif { color: var(--texte); border-color: var(--bord); background: var(--panneau); }
+button.lien { border-color: transparent; color: var(--attenue); padding: 4px 6px; }
+button.annuler { background: transparent; color: var(--erreur); border-color: var(--erreur); }
+button.danger { color: var(--erreur); border-color: var(--erreur); }
+
+.saisie { display: flex; gap: 8px; }
+.saisie input { flex: 1; font-size: 15px; padding: 9px 12px; }
+
+.video { color: var(--attenue); font-size: 13px; margin: 8px 2px 0; min-height: 20px; }
+.video strong { color: var(--texte); font-weight: 600; }
+
+.reglages { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; margin-top: 12px; }
+.avancees {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  background: var(--panneau);
+  border: 1px solid var(--bord);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+label { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+label.large { flex-direction: column; align-items: stretch; gap: 4px; }
+.note { color: var(--attenue); font-size: 12px; font-weight: 400; }
+label.case .note { flex-basis: 100%; margin-left: 24px; }
+
+.progression { margin-top: 18px; }
+.barre { height: 6px; background: var(--bord); border-radius: 3px; overflow: hidden; }
+.barre.petite { width: 120px; height: 4px; }
+.jauge { height: 100%; background: var(--accent); transition: width 0.2s; }
+.jauge.indeterminee { width: 30%; animation: va-et-vient 1.4s ease-in-out infinite; }
+@keyframes va-et-vient {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+.progression .ligne { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.progression .ligne p { flex: 1; margin: 0; color: var(--attenue); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.notice { color: var(--attenue); font-size: 13px; margin: 10px 2px 0; }
+
+.erreur {
+  margin-top: 16px;
+  border: 1px solid var(--erreur);
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: var(--panneau);
+}
+.erreur p { margin: 0; }
+.conseil { color: var(--attenue); font-size: 13px; margin-top: 4px !important; }
+details { margin-top: 8px; font-size: 12px; color: var(--attenue); }
+summary { cursor: pointer; }
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12px/1.45 ui-monospace, "Cascadia Code", Consolas, monospace;
+  margin: 6px 0 0;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.sortie { margin-top: 18px; position: relative; }
+.resume { color: var(--attenue); font-size: 13px; margin: 0 2px 6px; }
+.segments {
+  background: var(--panneau);
+  border: 1px solid var(--bord);
+  border-radius: 8px;
+  padding: 10px 14px;
+  height: 340px;
+  overflow-y: auto;
+  resize: vertical;
+}
+.segments p { margin: 0 0 6px; line-height: 1.6; }
+.temps {
+  display: inline-block;
+  min-width: 58px;
+  color: var(--attenue);
+  font: 12px ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+/* Posé dans le coin de la zone, au-dessus du texte qu'il ne doit pas masquer
+   : il n'apparaît qu'en cours de transcription, sans rangée d'actions dessous. */
+button.suivi {
+  position: absolute;
+  right: 22px;
+  bottom: 12px;
+  background: var(--panneau);
+  color: var(--texte);
+  border-color: var(--bord);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.separateur { color: var(--attenue); font-size: 13px; margin-left: 12px; }
+
+.bloc { margin-bottom: 8px; }
+table { width: 100%; border-collapse: collapse; background: var(--panneau); border: 1px solid var(--bord); border-radius: 8px; }
+td { padding: 7px 12px; border-top: 1px solid var(--bord); font-size: 13px; vertical-align: middle; }
+tr:first-child td { border-top: 0; }
+td .note { margin-left: 8px; }
+td.nombre { text-align: right; font-variant-numeric: tabular-nums; width: 90px; color: var(--attenue); }
+td.actions-ligne { text-align: right; width: 210px; white-space: nowrap; }
+td.actions-ligne .note { margin-right: 8px; }
+.chemin { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11px; }

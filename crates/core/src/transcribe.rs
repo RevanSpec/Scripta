@@ -108,10 +108,41 @@ impl Default for Options {
     }
 }
 
+/// Langues reconnues par Whisper : code ISO 639-1 (`fr`) et nom anglais
+/// (`french`), dans l'ordre de whisper.cpp.
+pub fn languages() -> Vec<(&'static str, &'static str)> {
+    (0..=whisper_rs::get_lang_max_id())
+        .filter_map(|id| {
+            Some((
+                whisper_rs::get_lang_str(id)?,
+                whisper_rs::get_lang_str_full(id)?,
+            ))
+        })
+        .collect()
+}
+
+/// Threads d'inférence par défaut : les cœurs physiques, en laissant au
+/// moins deux threads logiques libres — SPEC SF-04.
+///
+/// ggml synchronise ses threads par attente active : qu'un seul soit privé
+/// de processeur, par une autre application ou par son jumeau
+/// d'hyperthreading, et tous les autres l'attendent à chaque barrière.
+/// Mesuré sur un i7-13700H (14 cœurs, 20 threads logiques), une application
+/// voisine occupant un cœur : 20 threads transcrivent à **0,2 ×** le temps
+/// réel, 16 à 12 ×. Sans cette charge, le débit plafonne dès 6 threads,
+/// culmine à 14 — les cœurs physiques — et décroît au-delà : 13,6 × à 18,
+/// 10,3 × à 19.
 pub fn default_threads() -> usize {
-    std::thread::available_parallelism()
+    let logiques = std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(4)
+        .unwrap_or(4);
+    threads_pour(num_cpus::get_physical(), logiques)
+}
+
+/// Règle de [`default_threads`], séparée pour être éprouvée sur toute
+/// topologie.
+fn threads_pour(physiques: usize, logiques: usize) -> usize {
+    physiques.min(logiques.saturating_sub(2)).max(1)
 }
 
 /// Trampoline du rappel d'abandon, appelé par ggml depuis le code natif.
@@ -158,6 +189,34 @@ pub struct Hooks {
     /// CLI.
     pub on_segment: Option<SegmentHook>,
     pub cancel: Option<CancelToken>,
+}
+
+/// Trampoline du rappel de progression, appelé par whisper.cpp au début de
+/// chaque fenêtre de 30 s.
+///
+/// `set_progress_callback_safe` de whisper-rs 0.16.0 n'est pas employé : il
+/// fuit sa fermeture à chaque transcription, et avec elle tout ce qu'elle
+/// capture. L'application de bureau y perdait, à chaque transcription, le
+/// relais de ses messages et son thread. Le rappel est ici prêté pour la
+/// seule durée de `full()`, comme celui des segments.
+///
+/// # Sécurité
+///
+/// `user_data` doit pointer sur un `ProgressHook` vivant pendant tout l'appel
+/// à `full()`, ce que garantit [`Engine::transcribe`].
+unsafe extern "C" fn progress_trampoline(
+    _ctx: *mut whisper_rs_sys::whisper_context,
+    _state: *mut whisper_rs_sys::whisper_state,
+    progress: c_int,
+    user_data: *mut c_void,
+) {
+    if user_data.is_null() {
+        return;
+    }
+    // SÉCURITÉ : voir la documentation de la fonction.
+    let rappel = unsafe { &mut *(user_data as *mut ProgressHook) };
+    // Une panique ne doit pas traverser la frontière FFI.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rappel(progress)));
 }
 
 /// Contexte du rappel de segments, prêté au code natif le temps de `full()`.
@@ -393,8 +452,15 @@ impl Engine {
             params.set_entropy_thold(seuil);
         }
 
-        if let Some(mut cb) = on_progress {
-            params.set_progress_callback_safe(move |p: i32| cb(p));
+        // Prêté au code natif jusqu'après `full()`, comme le relais des
+        // segments ci-dessous.
+        let mut progression = on_progress;
+        if let Some(rappel) = progression.as_mut() {
+            // SÉCURITÉ : voir `progress_trampoline`.
+            unsafe {
+                params.set_progress_callback(Some(progress_trampoline));
+                params.set_progress_callback_user_data(rappel as *mut ProgressHook as *mut c_void);
+            }
         }
 
         // Le relais vit sur la pile jusqu'après `full()` : le pointeur cédé au
@@ -437,6 +503,7 @@ impl Engine {
 
         let issue = state.full(params, &samples);
         drop(relais);
+        drop(progression);
 
         // Reprise du compteur de références cédé à `Arc::into_raw`. À faire
         // impérativement après `full()` : le code natif lit ce pointeur
@@ -621,6 +688,14 @@ mod tests {
     }
 
     #[test]
+    fn les_langues_sont_celles_de_whisper() {
+        let langues = languages();
+        assert!(langues.len() >= 99, "{} langues", langues.len());
+        assert_eq!(langues[0], ("en", "english"));
+        assert!(langues.contains(&("fr", "french")));
+    }
+
+    #[test]
     fn modele_absent_est_signale() {
         // `unwrap_err` exigerait `Debug` sur Engine, qui encapsule un contexte
         // FFI non formatable.
@@ -628,6 +703,19 @@ mod tests {
             Err(e) => assert_eq!(e.exit_code(), 30),
             Ok(_) => panic!("un modèle inexistant ne devrait pas se charger"),
         }
+    }
+
+    #[test]
+    fn les_threads_par_defaut_laissent_de_la_marge() {
+        // i7-13700H : 14 cœurs physiques, 20 threads logiques.
+        assert_eq!(threads_pour(14, 20), 14);
+        // Quatre cœurs hyperthreadés : un thread par cœur.
+        assert_eq!(threads_pour(4, 8), 4);
+        // Sans hyperthreading, deux cœurs restent libres.
+        assert_eq!(threads_pour(8, 8), 6);
+        // Jamais zéro, même sur une machine minuscule.
+        assert_eq!(threads_pour(1, 2), 1);
+        assert_eq!(threads_pour(1, 1), 1);
     }
 
     #[test]

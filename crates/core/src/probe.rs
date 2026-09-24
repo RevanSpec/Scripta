@@ -6,10 +6,15 @@
 //! des charges prévoyait deux appels réseau distincts ; celui-ci les remplace.
 
 use std::collections::BTreeMap;
+use std::io::Read;
+use std::path::Path;
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::cancel::{self, CancelToken};
 use crate::error::{Result, ScriptaError, classify_sidecar_stderr};
 use crate::url::CanonicalUrl;
 
@@ -110,15 +115,31 @@ impl Access {
     }
 }
 
+/// Période de surveillance du jeton d'annulation pendant la sonde.
+const SURVEILLANCE: Duration = Duration::from_millis(100);
+
 /// Interroge `yt-dlp -J` et désérialise le résultat.
-pub fn probe(ytdlp: &std::path::Path, url: &CanonicalUrl, access: &Access) -> Result<Metadata> {
-    let output = Command::new(ytdlp)
+///
+/// Un jeton armé tue `yt-dlp` et rend [`ScriptaError::Interrupted`] : la
+/// sonde dure quelques secondes d'ordinaire, mais bien davantage sur un
+/// réseau qui ne répond plus, et le bouton « Annuler » de la GUI ne dispose
+/// pas, comme `Ctrl-C` dans une console, d'un signal délivré au sidecar
+/// lui-même.
+pub fn probe(
+    ytdlp: &Path,
+    url: &CanonicalUrl,
+    access: &Access,
+    cancel: Option<&CancelToken>,
+) -> Result<Metadata> {
+    let mut enfant = Command::new(ytdlp)
         .args(["-J", "--no-warnings", "--no-playlist"])
         .args(access.args())
         .arg("--")
         .arg(url.as_str())
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 ScriptaError::SidecarMissing {
@@ -131,9 +152,39 @@ pub fn probe(ytdlp: &std::path::Path, url: &CanonicalUrl, access: &Access) -> Re
             }
         })?;
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Les deux flux sont lus dans des threads dédiés : la réponse d'une vidéo
+    // pèse souvent plusieurs centaines de Kio, bien plus qu'un tampon de pipe,
+    // et ce thread-ci reste libre de surveiller l'annulation.
+    let sortie = lire_en_tache(enfant.stdout.take());
+    let erreurs = lire_en_tache(enfant.stderr.take());
 
-    if !output.status.success() {
+    let statut = loop {
+        if cancel::is_cancelled(cancel) {
+            let _ = enfant.kill();
+            let _ = enfant.wait();
+            // Les lecteurs ne sont pas attendus : sous Windows, yt-dlp est un
+            // exécutable autoextractible dont le processus enfant, qui survit
+            // au parent, peut garder les pipes ouverts jusqu'à sa propre fin.
+            return Err(ScriptaError::Interrupted);
+        }
+        match enfant.try_wait() {
+            Ok(Some(statut)) => break statut,
+            Ok(None) => thread::sleep(SURVEILLANCE),
+            Err(e) => {
+                let _ = enfant.kill();
+                let _ = enfant.wait();
+                return Err(ScriptaError::ExtractionFailed {
+                    detail: format!("attente de yt-dlp : {e}"),
+                });
+            }
+        }
+    };
+
+    let stdout = sortie.join().unwrap_or_default();
+    let stderr = erreurs.join().unwrap_or_default();
+    let stderr = String::from_utf8_lossy(&stderr);
+
+    if !statut.success() {
         return Err(
             classify_sidecar_stderr(&stderr).unwrap_or(ScriptaError::ExtractionFailed {
                 detail: format!("sonde yt-dlp en échec : {}", stderr.trim()),
@@ -141,7 +192,18 @@ pub fn probe(ytdlp: &std::path::Path, url: &CanonicalUrl, access: &Access) -> Re
         );
     }
 
-    parse_metadata(&output.stdout)
+    parse_metadata(&stdout)
+}
+
+/// Lit un flux jusqu'à sa fin dans un thread dédié.
+fn lire_en_tache(flux: Option<impl Read + Send + 'static>) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut contenu = Vec::new();
+        if let Some(mut flux) = flux {
+            let _ = flux.read_to_end(&mut contenu);
+        }
+        contenu
+    })
 }
 
 pub fn parse_metadata(json: &[u8]) -> Result<Metadata> {

@@ -123,8 +123,16 @@ jobs:
         with:
           tool: cargo-about
 
+      # Inventaire de la seule CLI : à la racine, cargo-about parcourrait tout
+      # le workspace, application de bureau comprise, et y listerait des
+      # bibliothèques absentes de l'archive — sous des licences qu'about.toml
+      # n'accepte pas, ce qui ferait échouer la release.
       - name: Licences des dépendances
-        run: cargo about generate --locked --target ${{ matrix.target }} -o LICENCES-DEPENDANCES.md about.hbs
+        run: >
+          cargo about generate --locked
+          --manifest-path crates/cli/Cargo.toml -c about.toml
+          --target ${{ matrix.target }}
+          -o LICENCES-DEPENDANCES.md about.hbs
 
       - name: Empaquetage
         shell: bash

@@ -10,6 +10,10 @@
 //! `txt`, `srt`, `vtt` et `json`. Autour d'elle : téléchargement vérifié des
 //! modèles, cache de transcriptions, sous-titres officiels, cookies, mise à
 //! jour de l'extracteur, annulation de toutes les opérations longues.
+//!
+//! [`pipeline`] enchaîne ces étapes pour les deux interfaces, qui n'en
+//! reçoivent que les événements : aucune règle d'orchestration n'est écrite
+//! deux fois.
 
 pub mod audio;
 pub mod cache;
@@ -21,6 +25,7 @@ pub mod format;
 pub mod models;
 pub mod output;
 pub mod paths;
+pub mod pipeline;
 pub mod probe;
 pub mod sidecar;
 pub mod subtitles;

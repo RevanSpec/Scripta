@@ -1,6 +1,6 @@
 # Scripta — Cahier des charges technique et fonctionnel
 
-**Version :** 2.2
+**Version :** 2.3
 **Statut :** Validé pour implémentation — ADR-001 révisé au Jalon 0, SF-04 précisé au Jalon 2
 **Révision précédente :** 1.0 (voir [Annexe C — Journal des corrections](#annexe-c--journal-des-corrections))
 
@@ -97,6 +97,14 @@ Le cœur applicatif et les interfaces sont développés en Rust. L'extraction r�
 6. Inférence `whisper_full` avec callbacks de progression et de segments.
 7. Formatage et écriture.
 
+> **Mis en œuvre au Jalon 3.** Cet enchaînement vit dans `core::pipeline`, et
+> nulle part ailleurs : ce qui entre dans la clé de cache, l'ordre des étapes
+> selon `--prefer-subs`, le repli silencieux, la primauté de l'annulation. La
+> CLI et la GUI n'en reçoivent que les événements, qu'elles rendent chacune à
+> leur manière. Le premier squelette de la GUI, qui tenait sa propre version
+> de l'enchaînement, avait dérivé en quelques semaines : VAD absent, clé de
+> cache incomplète, éviction oubliée.
+
 ### 2.2 Découpage des crates
 
 ```
@@ -118,15 +126,17 @@ Scripta/
 │   │   │   ├── format/         # txt, srt, vtt, json
 │   │   │   ├── sidecar.rs      # résolution de chemin, mise à jour
 │   │   │   ├── cache.rs        # cache de transcriptions
+│   │   │   ├── pipeline.rs     # orchestration, commune à la CLI et à la GUI
 │   │   │   └── error.rs        # ScriptaError (taxonomie SF-07)
 │   │   └── tests/
 │   │       └── fixtures/       # WAV courts, faux sidecars, golden files
 │   ├── cli/                    # binaire `scripta`
 │   └── desktop/                # wrapper Tauri v2
 │       ├── tauri.conf.json
+│       ├── capabilities/       # permissions de la fenêtre : core:default seul
 │       ├── src/                # backend Rust (commandes IPC)
 │       ├── ui/                 # frontend TypeScript + Svelte
-│       └── binaries/           # sidecars par triplet cible
+│       └── binaries/           # sidecars par triplet cible (J4)
 ```
 
 > **Correction v1 :** `src-tauri/` était placé à la racine, à côté de `crates/`. Il devient `crates/desktop/` pour homogénéiser le workspace.
@@ -274,6 +284,11 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
 - **Comportement par défaut : désactivé.** Les sous-titres auto-générés de YouTube sont dépourvus de ponctuation dans de nombreuses langues et de qualité inférieure à Whisper `small`. L'utilisateur doit les demander explicitement.
 - L'endpoint de sous-titres de YouTube est fréquemment limité en débit ou refusé (HTTP 429/403) : en cas d'échec, repli silencieux sur la transcription Whisper (sauf en sous-commande `subs`, où l'échec est remonté).
 
+> **Complété au Jalon 3.** La sonde est annulable : un jeton armé tue
+> `yt-dlp`. Dans une console, `Ctrl-C` atteignait déjà le sidecar ; le bouton
+> « Annuler » de la GUI, lui, ne dispose d'aucun signal, et une sonde figée sur
+> un réseau muet l'aurait rendu inopérant.
+
 ### SF-02 — Pipeline d'extraction audio « zero-disk »
 
 **Aucun fichier temporaire.** L'audio transite exclusivement par des pipes anonymes et de la mémoire.
@@ -374,8 +389,14 @@ Surchargeable par `SCRIPTA_MODELS_DIR`. Géré par `scripta models {list,pull,rm
 - Langue source : détection automatique par défaut, ou code ISO 639-1 forcé (`fr`, `en`, …).
 - `--translate` : traduction vers l'anglais.
   **⚠ Incompatibilité : `--translate` est refusé avec `--model turbo`.** `large-v3-turbo` a été entraîné pour la transcription seule ; sa sortie en mode traduction est inexploitable. La CLI rejette la combinaison avec un message explicite suggérant `large-v3`.
-- `--threads` : défaut = nombre de cœurs **physiques** (`num_cpus::get_physical()`). Sans effet notable lorsqu'un backend GPU est actif.
-  > **Écart assumé (J2).** Le défaut retenu est le parallélisme disponible (`std::thread::available_parallelism`, soit les cœurs logiques) : toutes les mesures du [§5.2](#52-performance) ont été faites ainsi, et aucune mesure comparative ne justifie encore d'ajouter `num_cpus`.
+- `--threads` : défaut = nombre de cœurs **physiques** (`num_cpus::get_physical()`), en laissant au moins deux threads logiques libres. Sans effet notable lorsqu'un backend GPU est actif.
+  > **Écart du J2 résorbé au J3.** Le J2 avait retenu tous les cœurs logiques, faute de mesure comparative. La mesure est venue de la GUI : sur un i7-13700H (14 cœurs, 20 threads logiques), une application voisine occupant un seul cœur suffit à faire tomber 20 threads à **0,2 ×** le temps réel, contre 12 × avec 16 threads. ggml synchronise ses threads par attente active, et un thread privé de processeur arrête tous les autres à chaque barrière. Sans charge voisine, sur 213 s d'audio, modèle `base` :
+  >
+  > | Threads | 6 | 8 | 10 | 12 | 14 | 16 | 18 | 19 |
+  > |---|---|---|---|---|---|---|---|---|
+  > | × temps réel | 17,6 | 17,7 | 17,7 | 17,6 | **18,1** | 17,0 | 13,6 | 10,3 |
+  >
+  > Le débit plafonne dès 6 threads et culmine aux cœurs physiques. Les mesures du [§5.2](#52-performance) antérieures au J3 ont été faites avec 20 threads.
 - `--word-timestamps` : horodatage au mot (`token_timestamps`), nécessaire au JSON enrichi.
 
 **VAD (détection d'activité vocale) — activé par défaut.**
@@ -605,7 +626,7 @@ OPTIONS DE `run` :
     -f, --format <FORMAT>       Format de sortie [défaut: txt] [txt, srt, vtt, json]
     -o, --output <PATH>         Fichier de sortie [défaut: stdout]
         --force                 Écrase le fichier de sortie s'il existe
-    -t, --threads <NUM>         Threads CPU [défaut: cœurs logiques]
+    -t, --threads <NUM>         Threads CPU [défaut: cœurs physiques]
         --vad / --no-vad        Détection d'activité vocale [défaut: activée]
         --vad-model <PATH>      Modèle VAD hors cache
         --no-speech-thold <F>   Seuil d'absence de parole [défaut whisper.cpp: 0.6]
@@ -675,6 +696,38 @@ OPTIONS DE `run` :
 - L'accélération affichée est celle **de la compilation** (`Backend::compiled()`) : conformément à [ADR-001](#adr-001--stratégie-daccélération-matérielle) révisé, aucun artefact ne découvre un GPU à l'exécution. *(Corrigé en v2.2 : cette ligne annonçait encore l'énumération à l'exécution de la v2.0.)*
 - Les segments s'affichent au fil de leur émission ; la zone de sortie suit automatiquement, sauf si l'utilisateur a fait défiler manuellement.
 
+> **Mis en œuvre au Jalon 3.**
+>
+> - **Commandes :** `backend_info`, `list_models`, `download_model`,
+>   `remove_model`, `probe_url`, `transcribe`, `cancel`, `export`,
+>   `copy_text`, `update_extractor`. Toute commande qui touche au disque, au
+>   réseau ou à un processus est asynchrone et travaille sur un thread
+>   bloquant. Seule `cancel` est synchrone : elle arme un jeton, sans jamais
+>   attendre un verrou tenu par la tâche. Le premier squelette tenait un
+>   verrou pendant toute l'inférence, et `cancel` l'attendait : la fenêtre se
+>   figeait jusqu'à la fin, et l'annulation n'annulait rien.
+> - **Progression et segments** passent par un canal propre à chaque appel
+>   (`tauri::ipc::Channel`) plutôt que par des événements globaux. Un thread
+>   de relais les regroupe en lots, au plus dix par seconde, et ne transmet
+>   qu'une progression en hausse : whisper.cpp la rappelle des milliers de
+>   fois par pourcent.
+> - **Une tâche longue à la fois** — transcription, téléchargement de modèle,
+>   mise à jour de l'extracteur. La réservation est libérée à sa destruction,
+>   erreur ou panique comprise.
+> - **Export et presse-papiers** passent par des commandes, qui ouvrent la
+>   boîte d'enregistrement native côté Rust. La fenêtre n'a que la
+>   permission `core:default` : ni système de fichiers, ni presse-papiers, et
+>   aucune commande n'écrit un contenu arbitraire à un chemin arbitraire.
+> - **Erreurs :** chaque variante de `ScriptaError` a son message pour
+>   l'interface, par une correspondance exhaustive ; les messages du cœur
+>   citent des options de la ligne de commande. Le détail technique est
+>   joint, replié.
+> - **Sidecars :** résolus sans le `PATH` (§5.1). En build de débogage
+>   seulement, le `PATH` sert de repli, tant que les sidecars ne sont pas
+>   embarqués (J4).
+> - Le bouton **Coller** de la maquette n'est pas repris : `Ctrl-V` suffit,
+>   et lire le presse-papiers exigerait une permission de plus.
+
 ---
 
 ## 5. Exigences non fonctionnelles
@@ -683,7 +736,7 @@ OPTIONS DE `run` :
 
 - **Aucune concaténation shell.** Aucun `sh -c`, aucun `cmd.exe`. Tous les arguments sont passés sous forme de tableau, précédés du séparateur `--`.
 - **URL canonique reconstruite** à partir de l'identifiant validé ([SF-01](#sf-01--validation-durl-et-sonde-de-métadonnées)) : l'entrée utilisateur brute n'atteint jamais un sidecar.
-- **Chemins de sidecars résolus explicitement**, jamais recherchés via `PATH` dans le contexte GUI — cela éviterait un détournement par un binaire homonyme placé en amont du `PATH`.
+- **Chemins de sidecars résolus explicitement**, jamais recherchés via `PATH` dans le contexte GUI — cela éviterait un détournement par un binaire homonyme placé en amont du `PATH`. *(J3 : `sidecar::resolve_installed` ne connaît que la copie mise à jour et la copie embarquée ; la GUI ne se replie sur le `PATH` qu'en build de débogage.)*
 - **Vérification d'intégrité SHA-256** sur tout artefact téléchargé (modèles, mises à jour de sidecars).
 - **Timeouts réseau explicites** sur toutes les requêtes ; aucune redirection suivie vers un hôte hors liste blanche.
 - **Aucune exécution de code téléchargé** autre que les sidecars vérifiés.
@@ -713,6 +766,13 @@ OPTIONS DE `run` :
 > selon la charge concurrente.
 >
 > Les seuils GPU restent **non mesurés** : aucune machine de test disponible.
+>
+> **Mesuré au Jalon 3.** Même vidéo de 61 min, modèle `base`, VAD actif,
+> horodatage au mot, depuis l'application de bureau en build optimisée : **14,0 ×
+> temps réel**, pic mémoire de 882 Mo. Le gain sur les 6,4 × du J2 tient au
+> nombre de threads par défaut, ramené de 20 aux 14 cœurs physiques (SF-04),
+> et ce alors même qu'une application voisine occupait un cœur : avec
+> 20 threads, cette seule charge faisait tomber l'inférence à 0,2 ×.
 
 **Autres seuils :**
 
@@ -815,6 +875,8 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 | 15 | Incompatibilité GPLv3 / App Store, avertissement CGU | [§1.3](#13-licence-et-conformité) |
 
 ## Annexe C — Journal des corrections
+
+**v2.3** — Retours du Jalon 3 : orchestration déplacée dans `core::pipeline`, commune aux deux interfaces (§2.1) ; sonde annulable (SF-01) ; mise en œuvre de la GUI décrite (§4.2) : canal par appel et relais regroupant les messages, tâche unique, export et presse-papiers côté Rust, messages d'erreur propres à l'interface ; résolution des sidecars sans `PATH` mise en œuvre (§5.1).
 
 **v2.2** — Retours du Jalon 2 : VAD orchestré par Scripta et motifs de l'écart, détection sur un thread, contexte glissant coupé en mode VAD, limite de `--initial-prompt` (SF-04, ADR-003, Annexe D) ; seuils `no_speech_thold` / `entropy_thold` exposés ; clé de cache complétée (SF-08) ; `--backend` retiré et §4.2 aligné sur ADR-001 révisé ; `--force`, `--model-path`, `--vad-model`, chemins de sidecars ajoutés au §4.1 ; mises en œuvre de SF-06 et du diagnostic SF-07 décrites ; écart assumé sur `--threads` ; mesure mémoire de référence corrigée (1 040 Mo).
 

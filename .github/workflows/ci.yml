@@ -26,10 +26,16 @@ jobs:
       # SPEC Annexe E : whisper-rs-sys compile whisper.cpp depuis les sources et
       # génère ses liaisons FFI par bindgen. CMake et libclang sont requis pour
       # BÂTIR le projet, jamais pour l'exécuter. Les runners Windows et macOS les
-      # fournissent déjà ; seul Linux demande une installation.
+      # fournissent déjà ; seul Linux demande une installation — plus, pour
+      # l'application de bureau, WebKitGTK et ses dépendances : sans elles,
+      # `scripta-desktop` ne compile pas, et la GUI échapperait à toute
+      # vérification.
       - name: Prérequis natifs (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libclang-dev \
+            libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev
 
       # Contournement du risque R9 (docs/ROADMAP.md). La crate `cmake` écrase
       # CMAKE_CXX_FLAGS_<BUILD_TYPE> ; avec le générateur Visual Studio, qui
@@ -61,6 +67,20 @@ jobs:
       - name: Toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
+
+      # Le frontend est bâti avant toute compilation Rust : c'est aussi sa
+      # vérification de types (svelte-check), la seule frontière du projet que
+      # le compilateur Rust ne couvre pas.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/desktop/ui/package-lock.json
+      - name: Frontend
+        working-directory: crates/desktop/ui
+        run: |
+          npm ci
+          npm run build
 
       - name: Format
         run: cargo fmt --all -- --check
