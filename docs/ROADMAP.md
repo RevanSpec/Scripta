@@ -305,7 +305,9 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > - **4.2** Build FFmpeg minimale, statique, sous LGPL : 3,2 Mo sous Linux,
 >   1,9 Mo sous Windows et macOS. Sur sa propre plateforme, chaque binaire
 >   décode cinq échantillons par la commande même du cœur.
-> - **4.5** Installeurs NSIS, AppImage et `.deb`, `.dmg` — non signés.
+> - **4.5** Installeurs non signés : NSIS (22 Mo), AppImage (125 Mo) et `.deb`
+>   (47 Mo), `.dmg` (43 Mo). yt-dlp en fait l'essentiel — son exécutable
+>   autonome embarque Python, 40 Mo sous Linux —, et l'AppImage, WebKitGTK.
 > - **4.6** Sommes de contrôle, notes de version, versions des sidecars, et
 >   l'archive source de FFmpeg, que la LGPL impose de distribuer.
 >
