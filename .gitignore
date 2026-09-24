@@ -7,3 +7,8 @@ Cargo.lock.orig
 crates/desktop/ui/node_modules/
 crates/desktop/ui/dist/
 crates/desktop/gen/
+
+# Empaquetage de l'application de bureau : sidecars acquis ou compilés par
+# scripts/sidecars/, et inventaire des licences, produits à chaque build.
+crates/desktop/binaries/
+crates/desktop/LICENCES-DEPENDANCES.md

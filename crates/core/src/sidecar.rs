@@ -50,6 +50,15 @@ impl Kind {
         format!("{}{}", self.name(), std::env::consts::EXE_SUFFIX)
     }
 
+    /// Nom de la copie embarquée dans les bundles de l'application de bureau.
+    ///
+    /// Préfixé pour ne jamais entrer en conflit avec le système : un paquet
+    /// `.deb` installe les sidecars dans `/usr/bin`, où `/usr/bin/ffmpeg`
+    /// appartient déjà au paquet ffmpeg de la distribution.
+    pub fn bundled_file_name(&self) -> String {
+        format!("scripta-{}", self.file_name())
+    }
+
     /// Nom de l'artefact publié par yt-dlp pour la cible courante.
     fn release_asset(&self) -> Option<&'static str> {
         match self {
@@ -148,11 +157,17 @@ pub fn resolve_installed(kind: Kind) -> Option<Resolved> {
         }
     }
 
-    let p = bundled_dir()?.join(&fichier);
-    p.is_file().then_some(Resolved {
-        path: p,
-        origin: Origin::Bundled,
-    })
+    // La copie embarquée par l'empaquetage d'abord ; le nom nu ensuite, celui
+    // d'un binaire déposé à la main à côté de l'exécutable.
+    let dir = bundled_dir()?;
+    [kind.bundled_file_name(), fichier]
+        .into_iter()
+        .map(|nom| dir.join(nom))
+        .find(|p| p.is_file())
+        .map(|path| Resolved {
+            path,
+            origin: Origin::Bundled,
+        })
 }
 
 /// Version rapportée par le binaire, ou `None` s'il est injoignable.
@@ -492,6 +507,16 @@ mod tests {
             r.origin,
             Origin::System | Origin::User | Origin::Bundled
         ));
+    }
+
+    #[test]
+    fn la_copie_embarquee_porte_un_nom_prefixe() {
+        let n = Kind::Ffmpeg.bundled_file_name();
+        if cfg!(windows) {
+            assert_eq!(n, "scripta-ffmpeg.exe");
+        } else {
+            assert_eq!(n, "scripta-ffmpeg");
+        }
     }
 
     #[test]
