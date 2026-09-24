@@ -410,6 +410,26 @@ Le banc qui a comparé les deux réglages — mêmes données, lancés à la sui
 mesurait 6,9 × avec contexte glissant et 8,0 × sans. L'écart avec les 6,4 × de
 la suite complète rappelle qu'un débit ne se compare qu'à conditions égales.
 
+### Mesure du J3, nombre de threads corrigé — 2026-09-24
+
+Même machine, code de la v0.1.1 : 14 threads — les cœurs physiques — au lieu
+de 20. TextInputHost, le service de saisie de Windows, occupait un cœur
+pendant toute la mesure.
+
+| Grandeur | Mesuré |
+|---|---|
+| Code de sortie | `0` |
+| Durée totale | **266 s** (4,4 min), contre 598 s |
+| Vitesse | **15,8 × temps réel**, contre 6,4 × |
+| Crête mémoire | 863 Mo |
+| Segments | 930 |
+| Couverture | 96,6 % |
+| **Concordance des deux chemins** | **75 %** |
+| Répétitions | les mêmes 12 segments hésitants, vers 1 142 s |
+
+Même transcription, deux fois et demie plus vite : le débit perdu tenait au
+seul nombre de threads (risque R12 de la [roadmap](ROADMAP.md)).
+
 ### Ce qu'il faut regarder
 
 | Point | Attendu |

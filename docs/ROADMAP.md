@@ -287,12 +287,17 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 4 — Packaging et CI/CD
 
-> **Statut : entamé — sous-ensemble de la v0.1.0 CLI.** Un tag `v*`
+> **Statut : entamé — sous-ensemble de la CLI v0.1.1.** Un tag `v*`
 > construit la CLI sur trois cibles — Windows x86-64, Linux x86-64, macOS
 > Apple Silicon —, la contrôle, l'empaquette avec ses licences (`cargo about`)
 > et ses sommes de contrôle, puis prépare un **brouillon** de release : la
 > publication reste un geste humain. Sans tag, le workflow sert de répétition
-> générale. Restent :
+> générale.
+>
+> La v0.1.0, préparée ainsi, n'a pas été publiée : elle portait le défaut de
+> threads révélé au J3 (R12). La première version publique est la v0.1.1.
+>
+> Restent :
 >
 > - la GUI et les variantes Vulkan ;
 > - la signature et la notarisation macOS, le binaire universel ;
@@ -301,7 +306,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > - l'empaquetage de l'application de bureau, avec son propre inventaire de
 >   licences : celui de la release CLI se limite désormais au graphe de la
 >   CLI, sans quoi les dépendances de Tauri l'auraient fait échouer ;
-> - la glibc 2.31 visée par le §5.3 : la v0.1.0 exige la 2.34, relevée sur
+> - la glibc 2.31 visée par le §5.3 : la CLI exige la 2.34, relevée sur
 >   le binaire construit sous Ubuntu 22.04.
 
 **Objectif :** un `git tag` produit des artefacts installables et signés pour les trois plateformes.
@@ -385,13 +390,13 @@ Aucune de ces tâches ne conditionne la v1.0.
 | R3 | **YouTube casse les extracteurs** | Élevé | **Certaine** *(question de quand, pas de si)* | Continu | [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) + tâche quotidienne 4.7 + [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour). **C'est la raison d'être de ces trois éléments** |
 | R4 | Vérification anti-robot bloquant les utilisateurs | Moyen | Élevée | J2 | Diagnostic explicite (code 12) + `--cookies-from-browser` documenté |
 | R5 | Chargement dynamique des backends non supporté | Moyen | Moyenne | J0 | Repli deux artefacts (+2 j sur le J4) |
-| R6 | Seuils de performance non atteints | Faible | **Écartée** | J2 | Mesuré à 4,8 × temps réel sur une machine au repos, contre un seuil de 3 ×. Les mesures antérieures à 2,1 × et 2,7 × étaient faussées par des compilations concurrentes : **un débit ne se mesure que sur une machine inoccupée**. Au J3, 14,0 × avec le VAD et le nombre de threads corrigé (R12) |
+| R6 | Seuils de performance non atteints | Faible | **Écartée** | J2 | Mesuré à 4,8 × temps réel sur une machine au repos, contre un seuil de 3 ×. Les mesures antérieures à 2,1 × et 2,7 × étaient faussées par des compilations concurrentes : **un débit ne se mesure que sur une machine inoccupée**. Au J3, 15,8 × avec le VAD et le nombre de threads corrigé (R12), une application voisine occupant pourtant un cœur |
 | R7 | Deadlock `stderr` découvert tardivement | Élevé | **Écartée par construction** | J1 | Test de non-régression dédié (1.8), exigé en critère de sortie |
 | R8 | Dérive de périmètre vers la GUI avant stabilisation du cœur | Moyen | **Écartée** | J2/J3 | J2 clos et v0.1.0 CLI construite avant la reprise de la GUI, qui s'est branchée sur un cœur stable : son enchaînement est celui de la CLI, dans `core::pipeline` |
 | R9 | **`--release` produit un whisper.cpp non optimisé sous MSVC** | Élevé | **Avérée — contournée** | J4 | Mesuré : sans correctif, release est 4 à 6× plus lent que debug. La crate `cmake` écrase `CMAKE_CXX_FLAGS_<BUILD_TYPE>` tandis que le générateur Visual Studio compile en `--config Release` : le profil release perd son `/O2`. **Contournement appliqué** — `CMAKE_{C,CXX}_FLAGS_RELEASE` forcés par l'environnement, que le `build.rs` de `whisper-rs-sys` réinjecte en define. Vérifié : 11,7–14,0× temps réel après correctif, contre 1,4–2,0× avant. Le contournement doit être porté dans la CI, le script de test et tout pipeline d'empaquetage : `.cargo/config.toml` ne permet pas d'`[env]` conditionné à la cible. Porté dans la CI et le script de test ; reste l'empaquetage (J4). ⚠ Depuis Git Bash, MSYS convertit ces valeurs — qui commencent par `/` — en chemins, et la compilation échoue : les poser depuis PowerShell ou cmd. Correctif amont souhaitable. |
 | R10 | **VAD intégré de whisper.cpp inopérant via whisper-rs, et horodatages de mots faux par l'autre voie** | Élevé | **Avérée — contournée** | J2 | `WhisperState::full` appelle `whisper_full_with_state`, qui ignore `params.vad` : `--vad-model` n'a jamais eu d'effet. Et `whisper_full`, qui applique le VAD, ne replace pas les tokens sur la chronologie d'origine. **Contournement :** VAD orchestré par Scripta (`core::vad`) — détection Silero, compactage sur place, correspondance exacte des chronologies. Vérifié par réintroduction : avec le VAD intégré, une parole placée à 5 s ressort horodatée à 0 s, et `le_vad_conserve_la_chronologie_d_origine` échoue. À réexaminer à chaque montée de whisper-rs |
 | R11 | **Boucle de répétition entretenue par le contexte glissant, révélée par le VAD** | Moyen | **Avérée — contournée** | J2 | Sur la vidéo de référence, VAD actif : 71 segments consécutifs « et qui est en train de se faire », de 2 240 à 2 395 s — 155 s de parole perdues, là où la mesure sans VAD n'en montrait aucune. Non reproduite sur un extrait de 700 s : elle dépend du contexte accumulé depuis le début. **Évaluée sur la vidéo entière :** sans contexte glissant (`n_max_text_ctx = 0`), la boucle disparaît — pire série, 7 segments bornés à leur fenêtre —, la concordance passe de 73 à 75 % et le débit de 6,9 à 8,0×. **Contournement :** en mode VAD, aucune fenêtre n'est conditionnée sur les précédentes. **Limite :** avec `--initial-prompt`, le contexte glissant est conservé, car whisper.cpp fait passer l'invite par le même canal et whisper-rs 0.16 n'expose pas `carry_initial_prompt` ; le risque demeure dans ce cas. Les entrées de cache VAD antérieures sont écartées |
-| R12 | **Effondrement du débit quand un thread d'inférence est privé de processeur** | Élevé | **Avérée — corrigée** | J3 | ggml synchronise ses threads par attente active. Avec un thread par cœur logique — le défaut du J2 —, une application voisine occupant un seul cœur a fait tomber l'inférence à **0,2 ×** le temps réel sur un i7-13700H (14 cœurs, 20 threads logiques), contre 12 × avec 16 threads. Révélé par l'acceptation de la GUI ; la CLI y était tout aussi exposée. **Correctif :** par défaut, les cœurs physiques, en laissant au moins deux threads logiques libres (`num_cpus`), comme le prévoyait la SPEC. Sans charge voisine, le débit culmine justement aux cœurs physiques ; la vidéo de référence passe de 6,4 à 14,0 × |
+| R12 | **Effondrement du débit quand un thread d'inférence est privé de processeur** | Élevé | **Avérée — corrigée** | J3 | ggml synchronise ses threads par attente active. Avec un thread par cœur logique — le défaut du J2 —, une application voisine occupant un seul cœur a fait tomber l'inférence à **0,2 ×** le temps réel sur un i7-13700H (14 cœurs, 20 threads logiques), contre 12 × avec 16 threads. Révélé par l'acceptation de la GUI ; la CLI y était tout aussi exposée. **Correctif :** par défaut, les cœurs physiques, en laissant au moins deux threads logiques libres (`num_cpus`), comme le prévoyait la SPEC. Sans charge voisine, le débit culmine justement aux cœurs physiques ; la vidéo de référence passe de 6,4 à 15,8 × en CLI, 14,0 × dans l'application de bureau |
 
 ---
 
