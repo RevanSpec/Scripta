@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": ["binaries/scripta-yt-dlp", "binaries/scripta-ffmpeg"],
+    "resources": {
+      "../../THIRD_PARTY_LICENSES.md": "licences/THIRD_PARTY_LICENSES.md",
+      "LICENCES-DEPENDANCES.md": "licences/LICENCES-DEPENDANCES.md",
+      "binaries/licences/": "licences/"
+    }
+  }
+}

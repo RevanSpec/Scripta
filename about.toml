@@ -1,5 +1,7 @@
-# Inventaire des licences des dépendances liées au binaire `scripta`, joint à
-# chaque archive de release (`LICENCES-DEPENDANCES.md`).
+# Inventaire des licences des dépendances liées aux binaires — `scripta` et
+# l'application de bureau —, joint à chaque artefact de release
+# (`LICENCES-DEPENDANCES.md`). Chaque inventaire se limite au graphe de son
+# binaire : `--manifest-path` désigne le crate.
 #
 # Liste fermée, et toutes compatibles avec la GPLv3 : une dépendance sous une
 # autre licence fait échouer `cargo about generate`. C'est voulu — la question
@@ -9,6 +11,9 @@ accepted = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "BSD-3-Clause",
+    # Boost Software License, compatible GPLv3 selon la FSF. Seul le
+    # presse-papiers de l'application de bureau, sous Windows, y recourt.
+    "BSL-1.0",
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",

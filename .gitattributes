@@ -1,0 +1,5 @@
+# Scripts shell en LF partout, extraits sous Windows compris : Git les y
+# convertirait sinon en CRLF, que `sh` refuse — les runners Windows de la CI
+# exécutent eux aussi scripts/sidecars/.
+*.sh  text eol=lf
+*.env text eol=lf

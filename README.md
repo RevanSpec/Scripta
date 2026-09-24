@@ -33,7 +33,7 @@ attendant d'être empaquetée.
 | Sous-titres YouTube officiels | ✅ |
 | Cache de transcriptions | ✅ |
 | Mise à jour de l'extracteur | ✅ |
-| Application de bureau | 🚧 fonctionnelle, non empaquetée |
+| Application de bureau | 🚧 installeurs non signés, dès la prochaine release |
 | Binaires précompilés (CLI) | ✅ v0.1.1 |
 
 Suivi détaillé dans [`docs/ROADMAP.md`](docs/ROADMAP.md).
@@ -75,7 +75,7 @@ Scripta invoque **yt-dlp** et **ffmpeg** sans les embarquer : installez-les
 séparément (commandes ci-dessous), placez `scripta` dans votre `PATH`, puis
 vérifiez avec `scripta doctor`.
 
-> **macOS** : le binaire n'est pas encore signé. Téléchargé par un navigateur,
+> **macOS** : le binaire n'est pas signé. Téléchargé par un navigateur,
 > il est bloqué par Gatekeeper ; retirez l'attribut de quarantaine avec
 > `xattr -d com.apple.quarantine scripta`.
 
@@ -147,9 +147,18 @@ de YouTube, HuggingFace et GitHub. Sa dernière ligne dénombre les problèmes.
 
 ### Application de bureau
 
-Tauri v2 et Svelte. Elle n'est pas encore empaquetée : elle se lance depuis les
-sources, avec, en plus des prérequis ci-dessus, **Node.js** 20 ou ultérieur et
-la CLI de Tauri.
+Tauri v2 et Svelte. Les releases à venir joignent ses installeurs — NSIS sous
+Windows, AppImage et `.deb` sous Linux, `.dmg` sous macOS. Ils embarquent
+yt-dlp et une build minimale de ffmpeg : rien d'autre à installer.
+
+> **Installeurs non signés**, et ils ne le seront pas. Au premier lancement,
+> Windows affiche l'écran SmartScreen « Windows a protégé votre ordinateur » :
+> *Informations complémentaires*, puis *Exécuter quand même*. Sous macOS,
+> retirez l'attribut de quarantaine après installation :
+> `xattr -dr com.apple.quarantine /Applications/Scripta.app`.
+
+Depuis les sources, il faut en plus des prérequis ci-dessus **Node.js** 20 ou
+ultérieur et la CLI de Tauri.
 
 ```bash
 cargo install tauri-cli --locked
@@ -176,6 +185,19 @@ sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev l
 `cargo build`, sans `-p`, ne construit que le cœur et la CLI : l'application
 exige WebKitGTK sous Linux et se construit par `cargo tauri`, qui embarque son
 frontend.
+
+**Installeur local.** Les sidecars s'acquièrent par les scripts de la CI, qui
+vérifient chaque empreinte ; `<triplet>` est celui de la machine
+(`rustc --print host-tuple`). ffmpeg se compile sous Linux et macOS — la
+version Windows, depuis Linux, par mingw-w64.
+
+```bash
+sh scripts/sidecars/fetch-ytdlp.sh <triplet> crates/desktop/binaries
+sh scripts/sidecars/build-ffmpeg.sh <triplet> crates/desktop/binaries
+cargo about generate --locked --manifest-path crates/desktop/Cargo.toml -c about.toml \
+    about.hbs -o crates/desktop/LICENCES-DEPENDANCES.md
+cd crates/desktop && cargo tauri build --config tauri.bundle.conf.json
+```
 
 ### Accélération matérielle
 
@@ -249,8 +271,8 @@ scripta update-extractor
 
 Le binaire est téléchargé depuis les *releases* de yt-dlp, vérifié par
 SHA-256, et installé dans un **répertoire utilisateur** — jamais dans le
-bundle applicatif. Y écrire invaliderait sa signature, et sur Apple Silicon
-l'application ne se lancerait plus (ADR-004). `scripta doctor` indique la
+bundle applicatif, dont l'emplacement n'est pas inscriptible sans élévation
+(ADR-004). `scripta doctor` indique la
 provenance du binaire retenu : `mis à jour`, `embarqué` ou `système`.
 
 Scripta vérifie **au plus une fois par jour** qu'une version plus récente

@@ -28,6 +28,9 @@
     "icon": ["icons/icon.png", "icons/icon.ico"],
     "licenseFile": "../../LICENSE",
     "longDescription": "Transcription locale de vidéos YouTube. L'inférence tourne sur votre machine ; rien de ce qui est transcrit ne quitte votre poste.",
-    "shortDescription": "Transcription locale de vidéos YouTube."
+    "shortDescription": "Transcription locale de vidéos YouTube.",
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
   }
 }
