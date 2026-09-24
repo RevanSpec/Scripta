@@ -13,7 +13,7 @@
 //! - l'environnement d'un processus est global, ce qui rendrait les tests
 //!   dépendants de leur ordre d'exécution sous `cargo test` (qui parallélise).
 //!
-//! Grammaire : `<rôle>[-sl<N>][-so<N>][-se<N>][-x<N>][-msg<HEX>]`
+//! Grammaire : `<rôle>[-sl<N>][-so<N>][-se<N>][-x<N>][-msg<HEX>][-txt<HEX>]`
 //!
 //! | Jeton | Effet |
 //! |---|---|
@@ -24,6 +24,7 @@
 //! | `se<N>` | déverse `N` octets sur stderr |
 //! | `x<N>` | code de sortie `N` |
 //! | `msg<HEX>` | message UTF-8 encodé en hexadécimal, écrit sur stderr |
+//! | `txt<HEX>` | texte UTF-8 encodé en hexadécimal, écrit sur stdout : la réponse JSON d'une sonde |
 //!
 //! `se<N>` est l'outil du test de non-régression de l'interblocage : au-delà de
 //! la taille du tampon de pipe (≈64 Kio), un `stderr` non drainé bloque
@@ -38,6 +39,7 @@ struct Config {
     stderr_bytes: usize,
     exit: i32,
     message: Option<String>,
+    text: Option<String>,
 }
 
 fn parse_config() -> Config {
@@ -53,6 +55,7 @@ fn parse_config() -> Config {
         stderr_bytes: 0,
         exit: 0,
         message: None,
+        text: None,
     };
 
     for token in stem.split('-').skip(1) {
@@ -64,6 +67,8 @@ fn parse_config() -> Config {
             cfg.stderr_bytes = v.parse().unwrap_or(0);
         } else if let Some(v) = token.strip_prefix("msg") {
             cfg.message = decode_hex(v);
+        } else if let Some(v) = token.strip_prefix("txt") {
+            cfg.text = decode_hex(v);
         } else if let Some(v) = token.strip_prefix('x') {
             cfg.exit = v.parse().unwrap_or(0);
         }
@@ -116,6 +121,11 @@ fn main() {
             written += n;
         }
         let _ = err.flush();
+    }
+
+    if let Some(text) = &cfg.text {
+        let _ = std::io::stdout().write_all(text.as_bytes());
+        let _ = std::io::stdout().flush();
     }
 
     if cfg.stdout_bytes > 0 {

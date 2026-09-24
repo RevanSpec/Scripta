@@ -20,11 +20,12 @@ use std::time::{Duration, Instant};
 use clap::{ArgAction, Parser, Subcommand};
 use scripta_core::audio::{self, Sidecars};
 use scripta_core::format::{OutputFormat, SubtitleOptions};
+use scripta_core::pipeline::{self, EngineSlot, Event, ModelChoice, Request, VadChoice};
 use scripta_core::sidecar::UpdateNotice;
 use scripta_core::transcribe::NewSegment;
 use scripta_core::{
-    CancelToken, Document, Engine, ModelSpec, Run, ScriptaError, Source, cache, diagnostic, models,
-    output, probe, sidecar, subtitles, transcribe, url,
+    CancelToken, Document, ModelSpec, Run, ScriptaError, cache, diagnostic, models, output, probe,
+    sidecar, subtitles, transcribe, url,
 };
 
 #[derive(Parser)]
@@ -220,7 +221,7 @@ struct RunArgs {
     word_timestamps: bool,
 
     /// Refus au-delà de cette durée, en minutes.
-    #[arg(long, default_value_t = 240)]
+    #[arg(long, default_value_t = pipeline::DEFAULT_MAX_DURATION_MIN)]
     max_duration: u64,
 
     /// Chemin explicite du binaire yt-dlp.
@@ -253,16 +254,6 @@ impl RunArgs {
     /// le dernier des deux drapeaux l'emporte.
     fn vad_actif(&self) -> bool {
         self.vad || !self.no_vad
-    }
-
-    /// Contexte normalisé : vide ou blanc, il équivaut à son absence — et ne
-    /// doit pas produire une clé de cache distincte.
-    fn contexte(&self) -> Option<String> {
-        self.initial_prompt
-            .as_deref()
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .map(str::to_string)
     }
 
     /// Le JSON porte toujours les mots (SF-05).
@@ -495,111 +486,32 @@ fn sous_titres_options(args: &RunArgs) -> SubtitleOptions {
     }
 }
 
-/// Identifiant du modèle **sans** le charger ni le télécharger.
-///
-/// Il entre dans la clé de cache, qu'il faut pouvoir calculer avant toute
-/// opération coûteuse : sur un succès de cache, ni le modèle ni le réseau ne
-/// sont nécessaires.
-fn model_id_of(args: &RunArgs) -> scripta_core::Result<String> {
-    let fichier = match &args.model_path {
-        Some(p) => p.clone(),
-        None => PathBuf::from(resolve_alias(&args.model)?.file),
-    };
-    Ok(fichier
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "inconnu".to_string()))
-}
-
-/// Modèle chargé, avec le modèle VAD prêt s'il est actif.
-struct Moteur {
-    engine: Engine,
-    vad: Option<PathBuf>,
-}
-
-fn charger_moteur(args: &RunArgs, cancel: &CancelToken) -> scripta_core::Result<Moteur> {
-    let chemin = resolve_model(args, cancel)?;
-    let vad = resolve_vad(args, cancel)?;
-    if !args.quiet {
-        eprintln!("Chargement du modèle ({})…", chemin.display());
-    }
-    match &vad {
-        Some(p) => args.detail(&format!("VAD : {}", p.display())),
-        None => args.detail("VAD : désactivé"),
-    }
-    let engine = Engine::load(&chemin)?;
-    Ok(Moteur { engine, vad })
-}
-
-fn document_de(
-    url: &scripta_core::CanonicalUrl,
-    meta: &probe::Metadata,
-    transcript: scripta_core::Transcript,
-    run: Run,
-) -> Document {
-    Document {
-        source: Source {
-            url: url.as_str(),
-            video_id: url.video_id().to_string(),
-            title: meta.title.clone(),
-            channel: meta.channel.clone(),
-            duration_s: meta.duration,
-            upload_date: meta.upload_date.clone(),
+/// Traduit les options de la ligne de commande en requête pour le cœur, qui
+/// porte seul les règles de l'enchaînement (voir `scripta_core::pipeline`).
+fn requete(url: scripta_core::CanonicalUrl, args: &RunArgs) -> Request {
+    Request {
+        url,
+        model: match &args.model_path {
+            Some(p) => ModelChoice::File(p.clone()),
+            None => ModelChoice::Alias(args.model.clone()),
         },
-        run: Run {
-            language: transcript.language.clone(),
-            ..run
+        vad: match (args.vad_actif(), &args.vad_model) {
+            (false, _) => VadChoice::Off,
+            (true, Some(p)) => VadChoice::File(p.clone()),
+            (true, None) => VadChoice::Catalogue,
         },
-        transcript,
-    }
-}
-
-/// Tente la récupération des sous-titres officiels — SPEC SF-01.
-///
-/// Retourne `None` plutôt qu'une erreur en cas d'absence ou d'échec : la
-/// spécification impose un **repli silencieux** sur la transcription. Les
-/// endpoints de sous-titres de YouTube sont fréquemment limités en débit, et
-/// un `--prefer-subs` ne doit jamais faire échouer une commande qui aurait
-/// abouti sans lui.
-fn recuperer_sous_titres(
-    meta: &probe::Metadata,
-    args: &RunArgs,
-) -> Option<scripta_core::Transcript> {
-    let piste = subtitles::best_track(meta, args.lang.as_deref())?;
-
-    if !args.quiet {
-        eprintln!(
-            "Sous-titres {} trouvés ({}).",
-            if piste.auto {
-                "auto-générés"
-            } else {
-                "officiels"
-            },
-            piste.lang
-        );
-        if piste.auto {
-            eprintln!(
-                "  Attention : une piste auto-générée est souvent sans ponctuation\n\
-                   et en deçà de Whisper. Retirez --prefer-subs pour transcrire."
-            );
-        }
-        if subtitles::is_translation(&piste, meta) {
-            eprintln!(
-                "  Attention : traduction automatique, non la transcription d'origine\n\
-                   ({} d'après YouTube). Deux passages machine se cumulent.",
-                meta.language.as_deref().unwrap_or("?")
-            );
-        }
-    }
-
-    match subtitles::fetch(&piste) {
-        Ok(t) => Some(t),
-        Err(e) => {
-            if !args.quiet {
-                eprintln!("  Échec : {e}");
-            }
-            None
-        }
+        lang: args.lang.clone(),
+        translate: args.translate,
+        initial_prompt: args.initial_prompt.clone(),
+        word_timestamps: args.mots_horodates(),
+        no_speech_thold: args.no_speech_thold,
+        entropy_thold: args.entropy_thold,
+        threads: args.threads.unwrap_or_else(transcribe::default_threads),
+        prefer_subs: args.prefer_subs,
+        use_cache: !args.no_cache,
+        max_duration_min: args.max_duration,
+        access: access_of(args),
+        sidecars: sidecars_of(args),
     }
 }
 
@@ -618,7 +530,7 @@ fn subs(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
     install_interrupt_handler(cancel.clone(), args.quiet);
     let access = access_of(args);
 
-    let meta = probe::probe(&ytdlp_of(args), &url, &access);
+    let meta = probe::probe(&ytdlp_of(args), &url, &access, Some(&cancel));
     verifier_interruption(&cancel)?;
     let meta = meta?;
     probe::check_admissible(&meta, args.max_duration)?;
@@ -636,7 +548,7 @@ fn subs(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
 
     let transcript = subtitles::fetch(&piste);
     verifier_interruption(&cancel)?;
-    let doc = document_de(&url, &meta, transcript?, Run::default());
+    let doc = pipeline::document(&url, &meta, transcript?, Run::default());
     ecrire(args, &doc)
 }
 
@@ -657,188 +569,221 @@ fn run(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
     let cancel = CancelToken::new();
     install_interrupt_handler(cancel.clone(), args.quiet);
 
-    let progress = |msg: &str| {
-        if !args.quiet {
+    let requete = requete(url, args);
+    let journal = Arc::new(Journal::new(args.affichage(), args.verbose > 0));
+    let observateur: Arc<dyn pipeline::Observer> = journal.clone();
+    let issue = pipeline::run(&requete, &EngineSlot::new(), &observateur, &cancel);
+    // Sur une erreur en cours d'inférence, la barre resterait affichée et se
+    // mêlerait au message d'erreur.
+    journal.effacer_barre();
+    ecrire(args, &issue?.document)
+}
+
+/// Rend compte du déroulement d'une transcription sur `stderr` — SPEC §4.1.
+///
+/// Progression et segments arrivent du thread d'inférence : l'état est
+/// verrouillé.
+struct Journal {
+    affichage: Affichage,
+    verbeux: bool,
+    telechargement: Mutex<Telechargement>,
+    barre: Mutex<Option<BarreTranscription>>,
+}
+
+/// Progression du téléchargement en cours.
+#[derive(Default)]
+struct Telechargement {
+    /// Fichier en cours : le modèle VAD, qui suit le modèle Whisper, repart
+    /// de zéro.
+    fichier: Option<&'static str>,
+    /// Dernier pourcentage affiché : chaque rappel coûterait sinon une
+    /// écriture terminal.
+    pourcent: Option<u64>,
+}
+
+impl Journal {
+    fn new(affichage: Affichage, verbeux: bool) -> Self {
+        Self {
+            affichage,
+            verbeux,
+            telechargement: Mutex::default(),
+            barre: Mutex::default(),
+        }
+    }
+
+    fn ligne(&self, msg: &str) {
+        if self.affichage != Affichage::Muet {
             eprintln!("{msg}");
         }
-    };
-
-    let access = access_of(args);
-    let model_id = model_id_of(args)?;
-    // Avant tout téléchargement : récupérer 570 Mo de `turbo` pour refuser
-    // ensuite la traduction serait un gâchis (SPEC SF-04).
-    transcribe::check_translate_supported(&model_id, args.translate)?;
-
-    // La clé réunit tout ce qui influe sur le résultat. En omettre un seul
-    // élément ferait resservir une transcription obtenue dans d'autres
-    // conditions — un défaut silencieux, donc le pire (SPEC SF-08).
-    let clef = cache::Key {
-        video_id: url.video_id().to_string(),
-        model: model_id,
-        lang: args.lang.clone(),
-        translate: args.translate,
-        vad: args.vad_actif(),
-        word_timestamps: args.mots_horodates(),
-        initial_prompt: args.contexte(),
-        no_speech_thold: args.no_speech_thold,
-        entropy_thold: args.entropy_thold,
-    };
-    args.detail(&format!("clé de cache : {}", clef.digest()));
-
-    // Consultation avant tout le reste : sur un succès, ni le modèle ni le
-    // réseau ne sont sollicités.
-    if !args.no_cache
-        && let Some(doc) = cache::get(&clef)
-    {
-        progress("Transcription trouvée en cache.");
-        return ecrire(args, &doc);
     }
 
-    // Ordre dicté par `--prefer-subs`. Sans lui, le modèle est résolu en
-    // premier pour qu'un modèle absent échoue immédiatement plutôt qu'après
-    // plusieurs minutes de téléchargement. Avec lui, il se peut qu'aucun modèle
-    // ne soit nécessaire : il serait absurde d'en télécharger un pour rien.
-    let moteur = if args.prefer_subs {
-        None
-    } else {
-        Some(charger_moteur(args, &cancel)?)
-    };
-
-    progress("Sonde des métadonnées…");
-    let meta = probe::probe(&ytdlp_of(args), &url, &access);
-    verifier_interruption(&cancel)?;
-    let meta = meta?;
-    probe::check_admissible(&meta, args.max_duration)?;
-
-    if !args.quiet {
-        let duree = meta
-            .duration
-            .map(format_duree)
-            .unwrap_or_else(|| "durée inconnue".to_string());
-        eprintln!("« {} » — {duree}", meta.title);
+    /// Diagnostic de `--verbose`.
+    fn detail(&self, msg: &str) {
+        if self.verbeux {
+            eprintln!("  · {msg}");
+        }
     }
 
-    if args.prefer_subs {
-        let sous_titres = recuperer_sous_titres(&meta, args);
-        verifier_interruption(&cancel)?;
-        match sous_titres {
-            Some(transcript) => {
-                let doc = document_de(&url, &meta, transcript, Run::default());
-                return ecrire(args, &doc);
+    /// Téléchargement d'un modèle — SPEC SF-03.
+    fn telechargement(&self, spec: &ModelSpec, recus: u64, total: u64) {
+        if self.affichage == Affichage::Muet || total == 0 {
+            return;
+        }
+        // Un verrou empoisonné ne doit pas interrompre un téléchargement pour
+        // une question d'affichage.
+        let mut etat = self
+            .telechargement
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if etat.fichier != Some(spec.file) {
+            eprintln!(
+                "Téléchargement de {} ({})…",
+                spec.file,
+                taille_lisible(spec.size)
+            );
+            *etat = Telechargement {
+                fichier: Some(spec.file),
+                pourcent: None,
+            };
+        }
+        if self.affichage == Affichage::Barre {
+            let pourcent = recus * 100 / total;
+            if etat.pourcent != Some(pourcent) {
+                etat.pourcent = Some(pourcent);
+                eprint!(
+                    "\r  {pourcent:>3} %  ({} / {} Mo)",
+                    recus / 1_048_576,
+                    total / 1_048_576
+                );
             }
-            None => progress("Pas de sous-titres exploitables : repli sur la transcription."),
         }
-    }
-
-    let moteur = match moteur {
-        Some(m) => m,
-        None => charger_moteur(args, &cancel)?,
-    };
-
-    progress("Extraction audio…");
-    let samples = audio::extract(
-        &sidecars_of(args),
-        &url,
-        meta.duration,
-        &access,
-        Some(&cancel),
-    )?;
-    // Relevée avant l'inférence, qui consomme le tampon.
-    let audio_s = transcribe::duration_of(&samples);
-    progress(&format!(
-        "{} échantillons extraits ({audio_s:.1} s à {} Hz).",
-        samples.len(),
-        audio::SAMPLE_RATE
-    ));
-
-    let options = transcribe::Options {
-        language: args.lang.clone(),
-        translate: args.translate,
-        threads: args.threads.unwrap_or_else(transcribe::default_threads),
-        initial_prompt: args.contexte(),
-        word_timestamps: args.mots_horodates(),
-        vad_model: moteur.vad.clone(),
-        no_speech_thold: args.no_speech_thold,
-        entropy_thold: args.entropy_thold,
-    };
-    args.detail(&format!("threads : {}", options.threads));
-
-    let barre = match args.affichage() {
-        Affichage::Barre => Some(BarreTranscription::new(meta.duration.unwrap_or(audio_s))),
-        Affichage::Lignes => {
-            progress("Transcription…");
-            None
-        }
-        Affichage::Muet => None,
-    };
-    let hooks = transcribe::Hooks {
-        on_progress: barre.as_ref().map(BarreTranscription::rappel_progression),
-        on_segment: barre.as_ref().map(BarreTranscription::rappel_segment),
-        cancel: Some(cancel.clone()),
-    };
-
-    let debut = Instant::now();
-    let resultat = moteur.engine.transcribe(samples, &options, hooks);
-    if let Some(b) = &barre {
-        b.effacer();
-    }
-    let transcript = resultat?;
-    let ecoule = debut.elapsed();
-    let vitesse = if ecoule.as_secs_f64() > 0.0 {
-        audio_s / ecoule.as_secs_f64()
-    } else {
-        0.0
-    };
-
-    if !args.quiet {
-        eprintln!(
-            "Transcription terminée en {:.1} s ({vitesse:.1}× temps réel, {} segments, langue : {}).",
-            ecoule.as_secs_f64(),
-            transcript.segments.len(),
-            transcript.language.as_deref().unwrap_or("?")
-        );
-        if transcript.is_empty() {
-            eprintln!("Avertissement : aucune parole détectée, la transcription est vide.");
-        }
-    }
-
-    let doc = Document {
-        source: Source {
-            url: url.as_str(),
-            video_id: url.video_id().to_string(),
-            title: meta.title.clone(),
-            channel: meta.channel.clone(),
-            duration_s: meta.duration,
-            upload_date: meta.upload_date.clone(),
-        },
-        run: Run {
-            model: moteur.engine.model_id().to_string(),
-            backend: scripta_core::Backend::compiled().as_str().to_string(),
-            language: transcript.language.clone(),
-            language_probability: transcript.language_probability,
-            translated: options.translate,
-            vad: options.vad_model.is_some(),
-            duration_ms: ecoule.as_millis() as u64,
-            speed_realtime: (vitesse * 10.0).round() / 10.0,
-            ..Default::default()
-        },
-        transcript,
-    };
-
-    if !args.no_cache {
-        // Un échec de mise en cache ne doit jamais faire échouer une
-        // transcription réussie : le résultat est là, seule sa réutilisation
-        // future serait perdue.
-        match cache::put(&clef, &doc) {
-            Ok(()) => {
-                let _ = cache::evict(cache::DEFAULT_MAX_BYTES);
+        // Le hachage d'un gros modèle prend quelques secondes : autant le dire.
+        if recus >= total {
+            if self.affichage == Affichage::Barre {
+                eprintln!();
             }
-            Err(e) if !args.quiet => eprintln!("Avertissement : mise en cache impossible ({e})."),
-            Err(_) => {}
+            eprintln!("  Vérification de l'empreinte…");
         }
     }
 
-    ecrire(args, &doc)
+    fn barre(&self) -> Option<BarreTranscription> {
+        self.barre.lock().ok().and_then(|b| b.clone())
+    }
+
+    fn effacer_barre(&self) {
+        if let Some(barre) = self.barre.lock().ok().and_then(|mut b| b.take()) {
+            barre.effacer();
+        }
+    }
+}
+
+impl pipeline::Observer for Journal {
+    fn on_event(&self, event: Event<'_>) {
+        match event {
+            Event::CacheKey(empreinte) => self.detail(&format!("clé de cache : {empreinte}")),
+            Event::CacheHit => self.ligne("Transcription trouvée en cache."),
+            Event::Download {
+                model,
+                received,
+                total,
+            } => self.telechargement(model, received, total),
+            Event::Loading { model, vad } => {
+                self.ligne(&format!("Chargement du modèle ({})…", model.display()));
+                match vad {
+                    Some(p) => self.detail(&format!("VAD : {}", p.display())),
+                    None => self.detail("VAD : désactivé"),
+                }
+            }
+            Event::Probing => self.ligne("Sonde des métadonnées…"),
+            Event::Probed(meta) => {
+                let duree = meta
+                    .duration
+                    .map(format_duree)
+                    .unwrap_or_else(|| "durée inconnue".to_string());
+                self.ligne(&format!("« {} » — {duree}", meta.title));
+            }
+            Event::Subtitles {
+                track,
+                translation,
+                video_lang,
+            } => {
+                self.ligne(&format!(
+                    "Sous-titres {} trouvés ({}).",
+                    if track.auto {
+                        "auto-générés"
+                    } else {
+                        "officiels"
+                    },
+                    track.lang
+                ));
+                if track.auto {
+                    self.ligne(
+                        "  Attention : une piste auto-générée est souvent sans ponctuation\n  \
+                         et en deçà de Whisper. Retirez --prefer-subs pour transcrire.",
+                    );
+                }
+                if translation {
+                    self.ligne(&format!(
+                        "  Attention : traduction automatique, non la transcription d'origine\n  \
+                         ({} d'après YouTube). Deux passages machine se cumulent.",
+                        video_lang.unwrap_or("?")
+                    ));
+                }
+            }
+            Event::SubtitlesFailed(e) => self.ligne(&format!("  Échec : {e}")),
+            Event::SubtitlesFallback => {
+                self.ligne("Pas de sous-titres exploitables : repli sur la transcription.")
+            }
+            Event::Extracting => self.ligne("Extraction audio…"),
+            Event::Extracted { samples, audio_s } => self.ligne(&format!(
+                "{samples} échantillons extraits ({audio_s:.1} s à {} Hz).",
+                audio::SAMPLE_RATE
+            )),
+            Event::Transcribing { threads, media_s } => {
+                self.detail(&format!("threads : {threads}"));
+                match self.affichage {
+                    Affichage::Barre => {
+                        if let Ok(mut b) = self.barre.lock() {
+                            *b = Some(BarreTranscription::new(media_s));
+                        }
+                    }
+                    Affichage::Lignes => self.ligne("Transcription…"),
+                    Affichage::Muet => {}
+                }
+            }
+            Event::Progress(p) => {
+                if let Some(b) = self.barre() {
+                    b.progression(p);
+                }
+            }
+            Event::Segment(s) => {
+                if let Some(b) = self.barre() {
+                    b.segment(s);
+                }
+            }
+            Event::Transcribed {
+                transcript,
+                elapsed,
+                speed,
+            } => {
+                self.effacer_barre();
+                self.ligne(&format!(
+                    "Transcription terminée en {:.1} s ({speed:.1}× temps réel, {} segments, langue : {}).",
+                    elapsed.as_secs_f64(),
+                    transcript.segments.len(),
+                    transcript.language.as_deref().unwrap_or("?")
+                ));
+                if transcript.is_empty() {
+                    self.ligne(
+                        "Avertissement : aucune parole détectée, la transcription est vide.",
+                    );
+                }
+            }
+            Event::CacheWriteFailed(e) => {
+                self.ligne(&format!("Avertissement : mise en cache impossible ({e})."))
+            }
+        }
+    }
 }
 
 /// Barre de progression de l'inférence — SPEC SF-04.
@@ -872,27 +817,21 @@ impl BarreTranscription {
         })))
     }
 
-    fn rappel_progression(&self) -> transcribe::ProgressHook {
-        let barre = self.clone();
-        Box::new(move |p: i32| {
-            barre.maj(|e| {
-                // whisper.cpp rappelle bien plus souvent qu'à chaque pourcent,
-                // et chaque rappel coûterait une écriture terminal.
-                let change = p > e.pourcent;
-                e.pourcent = e.pourcent.max(p);
-                change
-            });
-        })
+    fn progression(&self, p: i32) {
+        self.maj(|e| {
+            // whisper.cpp rappelle bien plus souvent qu'à chaque pourcent, et
+            // chaque rappel coûterait une écriture terminal.
+            let change = p > e.pourcent;
+            e.pourcent = e.pourcent.max(p);
+            change
+        });
     }
 
-    fn rappel_segment(&self) -> transcribe::SegmentHook {
-        let barre = self.clone();
-        Box::new(move |s: &NewSegment| {
-            barre.maj(|e| {
-                e.position = Some(s.end);
-                true
-            });
-        })
+    fn segment(&self, s: &NewSegment) {
+        self.maj(|e| {
+            e.position = Some(s.end);
+            true
+        });
     }
 
     fn maj(&self, f: impl FnOnce(&mut EtatBarre) -> bool) {
@@ -942,86 +881,6 @@ impl EtatBarre {
     }
 }
 
-/// Résout le modèle et garantit sa présence locale — SPEC SF-03.
-///
-/// `--model-path` court-circuite tout : il sert aux modèles absents du
-/// catalogue, ou déposés à la main.
-fn resolve_model(args: &RunArgs, cancel: &CancelToken) -> scripta_core::Result<PathBuf> {
-    if let Some(p) = &args.model_path {
-        return Ok(p.clone());
-    }
-    fetch_model(resolve_alias(&args.model)?, args.affichage(), Some(cancel))
-}
-
-/// Modèle VAD à utiliser — SPEC SF-03, SF-04.
-///
-/// Actif par défaut et téléchargé au premier usage, comme les modèles Whisper.
-/// Un échec est une erreur (code 30), jamais une désactivation silencieuse :
-/// le résultat, et sa clé de cache, en dépendent.
-fn resolve_vad(args: &RunArgs, cancel: &CancelToken) -> scripta_core::Result<Option<PathBuf>> {
-    if !args.vad_actif() {
-        return Ok(None);
-    }
-    if let Some(p) = &args.vad_model {
-        return Ok(Some(p.clone()));
-    }
-    fetch_model(&models::VAD_MODEL, args.affichage(), Some(cancel))
-        .map(Some)
-        .map_err(|e| match e {
-            ScriptaError::ModelUnavailable { detail } => ScriptaError::ModelUnavailable {
-                detail: format!("{detail} — relancez avec --no-vad pour vous en passer"),
-            },
-            autre => autre,
-        })
-}
-
-/// Télécharge un modèle si besoin — SPEC SF-03.
-///
-/// Rien n'est imprimé quand le modèle est déjà en cache : le cas nominal doit
-/// rester silencieux.
-fn fetch_model(
-    spec: &ModelSpec,
-    affichage: Affichage,
-    cancel: Option<&CancelToken>,
-) -> scripta_core::Result<PathBuf> {
-    let mut annonce = false;
-    let mut dernier = u64::MAX;
-
-    let mut progression = |recus: u64, total: u64| {
-        if affichage == Affichage::Muet || total == 0 {
-            return;
-        }
-        if !annonce {
-            eprintln!(
-                "Téléchargement de {} ({})…",
-                spec.file,
-                taille_lisible(spec.size)
-            );
-            annonce = true;
-        }
-        if affichage == Affichage::Barre {
-            let pourcent = recus * 100 / total;
-            if pourcent != dernier {
-                dernier = pourcent;
-                eprint!(
-                    "\r  {pourcent:>3} %  ({} / {} Mo)",
-                    recus / 1_048_576,
-                    total / 1_048_576
-                );
-            }
-        }
-        // Le hachage d'un gros modèle prend quelques secondes : autant le dire.
-        if recus >= total {
-            if affichage == Affichage::Barre {
-                eprintln!();
-            }
-            eprintln!("  Vérification de l'empreinte…");
-        }
-    };
-
-    models::ensure(spec, &mut progression, cancel)
-}
-
 fn models_cmd(action: &ModelsAction) -> scripta_core::Result<()> {
     match action {
         ModelsAction::Path => {
@@ -1056,7 +915,8 @@ fn models_cmd(action: &ModelsAction) -> scripta_core::Result<()> {
         }
         ModelsAction::Pull { model } => {
             let spec = resolve_any_alias(model)?;
-            let chemin = fetch_model(spec, Affichage::de(false), None)?;
+            let chemin =
+                pipeline::fetch_model(spec, &Journal::new(Affichage::de(false), false), None)?;
             println!("{}", chemin.display());
         }
         ModelsAction::Rm { model } => {
@@ -1114,16 +974,6 @@ fn cache_cmd(action: &CacheAction) -> scripta_core::Result<()> {
         }
     }
     Ok(())
-}
-
-/// Alias d'un modèle **de transcription** — `--model`.
-fn resolve_alias(alias: &str) -> scripta_core::Result<&'static ModelSpec> {
-    models::find(alias).ok_or_else(|| ScriptaError::ModelUnavailable {
-        detail: format!(
-            "modèle « {alias} » inconnu (disponibles : auto, {})",
-            models::aliases().join(", ")
-        ),
-    })
 }
 
 /// Alias de tout le catalogue, modèle VAD compris — `scripta models`.
@@ -1395,16 +1245,42 @@ mod tests {
         assert!(analyse(&["--entropy-thold", "inf", URL]).is_err());
     }
 
+    fn requete_de(args: &[&str]) -> Request {
+        requete(url::parse(URL).unwrap(), &run_args(args))
+    }
+
     #[test]
     fn un_contexte_vide_equivaut_a_son_absence() {
         // Sans quoi il produirait une clé de cache distincte pour un résultat
         // identique.
-        assert_eq!(run_args(&[URL]).contexte(), None);
-        assert_eq!(run_args(&["--initial-prompt", "   ", URL]).contexte(), None);
+        assert_eq!(requete_de(&[URL]).prompt(), None);
+        assert_eq!(requete_de(&["--initial-prompt", "   ", URL]).prompt(), None);
         assert_eq!(
-            run_args(&["--initial-prompt", " Etienne Klein ", URL]).contexte(),
+            requete_de(&["--initial-prompt", " Etienne Klein ", URL]).prompt(),
             Some("Etienne Klein".to_string())
         );
+    }
+
+    #[test]
+    fn la_requete_reprend_les_options() {
+        let r = requete_de(&[URL]);
+        assert_eq!(r.model, ModelChoice::Alias("auto".into()));
+        assert_eq!(r.vad, VadChoice::Catalogue);
+        assert!(r.use_cache);
+        assert_eq!(r.max_duration_min, 240);
+
+        assert_eq!(requete_de(&["--no-vad", URL]).vad, VadChoice::Off);
+        assert_eq!(
+            requete_de(&["--vad-model", "silero.bin", URL]).vad,
+            VadChoice::File("silero.bin".into())
+        );
+        assert_eq!(
+            requete_de(&["-m", "small", "--model-path", "perso.bin", URL]).model,
+            ModelChoice::File("perso.bin".into())
+        );
+        assert!(!requete_de(&["--no-cache", URL]).use_cache);
+        // Le JSON impose les mots jusque dans la requête, donc dans la clé.
+        assert!(requete_de(&["-f", "json", URL]).word_timestamps);
     }
 
     #[test]
