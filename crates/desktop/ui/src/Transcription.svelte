@@ -85,7 +85,8 @@
   let segments = $state<Segment[]>([]);
   let resultat = $state<Transcription | null>(null);
   let erreur = $state<IpcError | null>(null);
-  let info_ = $state<string | null>(null);
+  /** Information passagère : annulation, fichier écrit, texte copié. */
+  let annonce = $state<string | null>(null);
 
   const position = $derived(segments.length ? segments[segments.length - 1].end : null);
   const vitesse = $derived(
@@ -149,7 +150,7 @@
     occupe = true;
     annulation = false;
     erreur = null;
-    info_ = null;
+    annonce = null;
     resultat = null;
     segments = [];
     notices = [];
@@ -182,7 +183,7 @@
     } catch (e) {
       const err = enErreur(e);
       if (err.code === CODE_ANNULE) {
-        info_ = "Transcription annulée.";
+        annonce = "Transcription annulée.";
       } else {
         erreur = err;
       }
@@ -222,10 +223,10 @@
 
   // ----------------------------------------------------------------- export --
   async function exporter(format: string) {
-    info_ = null;
+    annonce = null;
     try {
       const chemin = await exportAs(format);
-      if (chemin) info_ = `Enregistré : ${chemin}`;
+      if (chemin) annonce = `Enregistré : ${chemin}`;
     } catch (e) {
       erreur = enErreur(e);
     }
@@ -234,7 +235,7 @@
   async function copier() {
     try {
       await copyText();
-      info_ = "Texte copié dans le presse-papiers.";
+      annonce = "Texte copié dans le presse-papiers.";
     } catch (e) {
       erreur = enErreur(e);
     }
@@ -387,8 +388,8 @@
 {#if erreur}
   <Erreur {erreur} />
 {/if}
-{#if info_}
-  <p class="notice">{info_}</p>
+{#if annonce}
+  <p class="notice">{annonce}</p>
 {/if}
 
 {#if segments.length || resultat}
