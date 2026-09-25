@@ -52,6 +52,8 @@ head -c "$decalage" "$appimage" >"$travail/runtime.bin"
 # gagnait 1,2 Mo. Le niveau est donc fixé. Il ne vaut que pour zstd — gzip
 # plafonne à 9 —, de sorte qu'un changement de compresseur en amont ferait
 # échouer mksquashfs plutôt que de passer inaperçu.
+# Il subsiste 0,2 % d'écart sur le coureur, qui n'a pas été expliqué ; le
+# journal l'affiche, de sorte qu'une dérive plus large se verrait.
 if [ "$compression" = zstd ]; then
     mksquashfs "$travail/racine" "$travail/charge.sqfs" -root-owned -noappend -comp zstd -Xcompression-level 19 -no-progress -quiet
 else
