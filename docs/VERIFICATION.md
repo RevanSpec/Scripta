@@ -508,6 +508,53 @@ cinq minutes : TextInputHost, le service de saisie de Windows, occupait un
 cœur, et ce seul thread privé de processeur arrêtait les 19 autres à chaque
 barrière de ggml. D'où le nouveau défaut (risque R12 de la
 [roadmap](ROADMAP.md)).
+### Premier lancement sous Linux — 2026-09-25
+
+WSL2, Ubuntu 26.04.1, WSLg. AppImage de la v0.1.1, telle que la CI la produit.
+But : lancer l'application sous Linux, ce qui n'avait jamais été fait.
+
+| Vérification | Résultat |
+|---|---|
+| Montage de l'AppImage par FUSE, puis démarrage | la fenêtre s'ouvre — 1036 × 857, 123 Mo |
+| Dépendances dynamiques du binaire principal | aucune non résolue |
+| yt-dlp embarqué, exécuté | `2026.08.19` |
+| ffmpeg embarqué, exécuté | `9.0.2`, protocoles `file` et `pipe` seulement : la build minimale tient ses promesses |
+| Dépendances déclarées du `.deb` | `libwebkit2gtk-4.1-0`, `libgtk-3-0` |
+| **Affichage de la page** | **échec** — le processus de rendu de WebKit s'arrête au démarrage |
+
+La fenêtre s'ouvre donc, mais reste vide, et rien ne le dit à l'utilisateur :
+le journal ne porte qu'une ligne, `Could not create default EGL display:
+EGL_BAD_PARAMETER. Aborting...`.
+
+**Cause.** L'AppImage embarque 169 bibliothèques, dont `libwayland-client.so.0`
+prise sur la machine de build. L'AppRun place `$APPDIR/usr/lib` en tête du
+chemin de recherche, si bien que cette copie masque celle du système. Or
+`libEGL_mesa.so.0` en dépend : liée à la version embarquée, son initialisation
+échoue, et WebKit abandonne son processus de rendu.
+
+**Comment la cause a été établie.** Une sonde EGL de vingt lignes — `ctypes`,
+`eglGetDisplay`, `eglInitialize` — réussit avec le chemin du système et échoue,
+sur la même erreur, avec celui de l'AppImage. Une bissection sur les 169
+bibliothèques désigne `libwayland-client.so.0`, et elle seule : la retirer
+rétablit EGL. Les autres `libwayland` restent — aucune n'est sur le chemin
+d'EGL, et retirer `libwayland-server.so.0` empêche l'application de démarrer
+sur un système sans compositeur.
+
+**Correctif.** `scripts/empaquetage/appimage-sans-wayland-client.sh`, appelé
+après l'empaquetage : il désassemble l'AppImage, retire ce seul fichier, la
+réassemble avec la même compression, et vérifie le produit fini. Le script
+s'arrête de lui-même si le bundler cesse un jour d'embarquer cette
+bibliothèque, plutôt que de laisser croire le défaut corrigé.
+
+**Ce qui reste à voir.** L'application corrigée va plus loin — EGL s'initialise
+—, puis s'arrête sur `libGLESv2.so.2`, absente de cette Ubuntu minimale et non
+embarquée. Toute session de bureau la fournit, mais un environnement dépouillé
+non : `sudo apt install libgles2`. **L'interface n'a donc encore jamais été vue
+sous Linux** ; seuls son démarrage, ses sidecars et son édition de liens le
+sont.
+
+---
+
 
 ---
 

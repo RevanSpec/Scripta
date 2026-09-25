@@ -15,6 +15,7 @@ on:
       - "about.hbs"
       - "docs/releases/**"
       - "scripts/sidecars/**"
+      - "scripts/empaquetage/**"
       - "crates/desktop/tauri.bundle.conf.json"
   workflow_dispatch:
 
@@ -252,7 +253,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake libclang-dev \
             libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev \
-            libfuse2 file
+            libfuse2 file squashfs-tools
 
       # Risque R9, comme pour la CLI. Runtime C dynamique ici : l'installeur
       # s'appuie de toute façon sur WebView2, et Tauri n'est pas éprouvé en
@@ -330,6 +331,16 @@ jobs:
         shell: pwsh
         working-directory: crates/desktop
         run: node ui/node_modules/@tauri-apps/cli/tauri.js build --ci --config tauri.bundle.conf.json --bundles ${{ matrix.bundles }}
+
+      # linuxdeploy embarque une libwayland-client prise sur Ubuntu 22.04
+      # qui, sur un hôte plus récent, masque celle du système et fait
+      # échouer EGL : la fenêtre s'ouvre alors vide, sans message. Le script
+      # dit le détail, et s'arrête de lui-même si le bundler cesse un jour
+      # d'embarquer ce fichier.
+      - name: Correction de l'AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sh scripts/empaquetage/appimage-sans-wayland-client.sh target/release/bundle/appimage
 
       - name: Installeurs
         shell: bash
