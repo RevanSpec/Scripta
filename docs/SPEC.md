@@ -922,5 +922,21 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 | **libclang** (LLVM) | `bindgen`, génération des liaisons FFI | `winget install LLVM.LLVM` · `apt install libclang-dev` · fourni par Xcode |
 | **Rust** ≥ 1.88 | MSRV imposée par `whisper-rs-sys` 0.15 | `rustup` |
 | Toolchain C++ | MSVC 2022 · GCC/Clang · Xcode CLT | — |
+| **SDK Vulkan** | Variante `vulkan` seulement : `glslc` compile les shaders de ggml, et l'édition de liens réclame `vulkan-1.lib` | `winget install KhronosGroup.VulkanSDK` · `apt install vulkan-sdk` |
+
+
+**Le SDK n'est requis qu'à la compilation.** À l'exécution, le `vulkan-1.dll`
+installé par le pilote graphique suffit — relevé le 2026-09-25 sur une RTX 3070,
+où la variante Vulkan démarre sans que le SDK soit présent dans le `PATH`.
+
+**Deux pièges sous Windows**, rencontrés le 2026-09-25 :
+
+- **MAX_PATH.** whisper.cpp avec Vulkan ajoute environ 158 caractères de chemin
+  pour les journaux de suivi de MSBuild (`vulkan-shaders-gen`, `TryCompile`).
+  Depuis un chemin de projet de 98 caractères, la marge n'est que de quatre :
+  bâtir dans un répertoire de sortie plus profond échoue sur `FTK1011`.
+- **MSB8029.** MSBuild refuse un répertoire intermédiaire situé sous `%TEMP%` —
+  le repli naturel quand on cherche un chemin court est donc fermé. Il faut un
+  chemin à la fois court et hors du répertoire temporaire.
 
 **`WHISPER_DONT_GENERATE_BINDINGS`** court-circuite `bindgen` au profit des liaisons pré-générées du crate, ce qui lève la dépendance à libclang. **Ce repli ne fonctionne que sous Linux** : les liaisons embarquées décrivent des types glibc (`_IO_FILE`, `_G_fpos_t`) dont les assertions de taille échouent sous MSVC. Il n'est donc pas utilisable comme solution multiplateforme.

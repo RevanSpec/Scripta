@@ -430,6 +430,49 @@ pendant toute la mesure.
 Même transcription, deux fois et demie plus vite : le débit perdu tenait au
 seul nombre de threads (risque R12 de la [roadmap](ROADMAP.md)).
 
+### Accélération matérielle — Vulkan sur RTX 3070, 2026-09-25
+
+Première mesure GPU du projet. Windows 11, i7-13700H, **NVIDIA GeForce
+RTX 3070**, SDK Vulkan 1.4.357.0. Vidéo de référence de 61 min, modèle `base`,
+VAD, français imposé, `--no-cache`. Les deux variantes sont bâties depuis le
+même commit et lancées dos à dos.
+
+| Grandeur | CPU | **Vulkan** |
+|---|---|---|
+| Inférence, rapportée par Scripta | 301,4 s | **86,7 s** |
+| Vitesse annoncée | 12,1 × | **42,2 ×** |
+| Durée totale, extraction comprise | 318,7 s | 102,5 s |
+| Crête mémoire | 867 Mo | **798 Mo** |
+| Segments | 930 | 980 |
+| Taille du binaire | 4,9 Mo | **60,7 Mo** |
+
+**L'accélération annoncée correspond au matériel.** La vitesse que Scripta
+affiche est bien celle de l'inférence mesurée — 3 657 s d'audio en 301,4 s
+puis en 86,7 s —, et l'écart avec la durée totale n'est que le temps
+d'extraction, identique pour les deux.
+
+**Réserve sur le facteur.** La machine était à **36 % de charge** au départ,
+ce qui pénalise le CPU et lui seul : le GPU y est peu sensible. Rapporté au
+relevé du J3 sur machine au repos (15,8 ×), le facteur tomberait à **2,7 ×**.
+Le chiffre honnête est donc *entre 2,7 et 3,5 ×*, et seule une reprise sur
+machine inoccupée trancherait. C'est la leçon du risque R6, déjà payée une
+fois : **un débit ne se mesure que sur une machine inoccupée.**
+
+**Les deux backends ne rendent pas le même texte.** 88,0 % de concordance
+lexicale entre eux, 1,2 % de mots en moins côté Vulkan, 50 segments de plus,
+et la même couverture temporelle (96,6 %). L'arithmétique flottante diffère
+d'un backend à l'autre ; l'écart reste bien en deçà de celui qui sépare
+Scripta des sous-titres de YouTube (75 %). **Aucune régression de qualité,
+mais pas non plus de résultat reproductible d'un backend à l'autre** — ce
+qu'un test d'égalité stricte entre variantes ne devra jamais supposer.
+
+**Conséquence pour l'empaquetage.** La variante Vulkan pèse **douze fois**
+la variante CPU : les shaders de ggml ajoutent 56 Mo au binaire. À dire dans
+les notes de version, sous peine de surprendre au téléchargement.
+
+---
+
+
 ### Ce qu'il faut regarder
 
 | Point | Attendu |
