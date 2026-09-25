@@ -212,17 +212,40 @@ un GPU à l'exécution
 ([ADR-001](docs/SPEC.md#adr-001--stratégie-daccélération-matérielle)).
 
 ```bash
-cargo build --release --features vulkan   # NVIDIA, AMD, Intel
-cargo build --release --features metal    # Apple Silicon
-cargo build --release --features cuda     # NVIDIA uniquement
+cargo build --release -p scripta-cli --features vulkan   # NVIDIA, AMD, Intel
+cargo build --release -p scripta-cli --features metal    # Apple Silicon
+cargo build --release -p scripta-cli --features cuda     # NVIDIA uniquement
 ```
 
 Sans feature, la build est CPU et démarre partout. `scripta doctor` indique le
 backend compilé.
 
-> **Non éprouvé.** Seule la build CPU est construite et testée en CI. Les
-> builds GPU compilent en principe, mais aucune n'a encore été construite ni
-> mesurée (risque R1 de la [roadmap](docs/ROADMAP.md)).
+La variante Vulkan réclame le **SDK Vulkan** pour compiler — `glslc` pour les
+shaders de ggml, `vulkan-1.lib` pour l'édition de liens
+(`winget install KhronosGroup.VulkanSDK`, `apt install vulkan-sdk`). À
+l'exécution, le `vulkan-1.dll` posé par le pilote graphique suffit.
+
+> **Sous Windows, bâtir dans un répertoire de sortie court.** whisper.cpp avec
+> Vulkan ajoute près de 160 caractères de chemin, et MAX_PATH est atteint dès
+> que le projet est un peu profond. Le message ne le dit pas — il annonce
+> « No CMAKE_C_COMPILER could be found », parce que c'est la sous-compilation
+> de `vulkan-shaders-gen` qui est tronquée. Et `%TEMP%`, réflexe naturel pour
+> raccourcir, est refusé par MSBuild (`MSB8029`) :
+>
+> ```powershell
+> cargo build --release -p scripta-cli --features vulkan --target-dir C:\sv
+> ```
+
+**Mesuré** le 2026-09-25 sur une RTX 3070, vidéo de 61 min, modèle `base` :
+**42,2 × temps réel en Vulkan contre 12,1 × en CPU**, avec 69 Mo de mémoire
+vive en moins — les poids vivent sur la carte. Le binaire Vulkan pèse en
+revanche **60,7 Mo contre 4,9**, les shaders de ggml y ajoutant 56 Mo. Détail
+et réserves dans [VERIFICATION](docs/VERIFICATION.md).
+
+> **CUDA et Metal restent non éprouvés**, et la CI ne construit que la variante
+> CPU. Deux backends compilés ne rendent pas le même texte au bit près : 88 %
+> de concordance lexicale entre CPU et Vulkan sur la vidéo de référence.
+
 
 ---
 
