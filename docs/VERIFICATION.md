@@ -508,6 +508,37 @@ cinq minutes : TextInputHost, le service de saisie de Windows, occupait un
 cœur, et ce seul thread privé de processeur arrêtait les 19 autres à chaque
 barrière de ggml. D'où le nouveau défaut (risque R12 de la
 [roadmap](ROADMAP.md)).
+### Application installée sous Windows — 2026-09-25
+
+Installeur NSIS de la v0.1.1, tel que la CI le produit. Installation par
+profil, sans droits d'administrateur.
+
+| Vérification | Résultat |
+|---|---|
+| Installation silencieuse | code 0, dans `%LOCALAPPDATA%\Scripta` |
+| Contenu | `scripta-desktop.exe`, les deux sidecars, `uninstall.exe`, `licences/` avec la LGPL, la fiche de construction de FFmpeg et les notices de yt-dlp |
+| Entrée de désinstallation | Scripta 0.1.1, sous `HKCU` |
+| Raccourci | au menu Démarrer |
+| Démarrage | la fenêtre s'ouvre, l'interface s'affiche |
+| Onglet « Modèles et outils » | yt-dlp **embarqué**, ffmpeg **embarqué** ; espace occupé et chemin des modèles |
+| **`update-extractor`** | `yt-dlp.exe` (17 840 399 o) déposé dans `%LOCALAPPDATA%\scripta\bin`, **sans toucher au binaire embarqué** ; l'interface annonce « yt-dlp 2026.08.19 installé et vérifié » et la ligne bascule de « embarqué » à « **mis à jour** » |
+
+Ce dernier point valide [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour)
+sur une application installée, ce qu'aucun essai en mode développement ne peut
+faire : `resolve_installed()` consulte `bin/` avant le répertoire du bundle, et
+le marqueur d'origine affiché le confirme.
+
+**Une collision à connaître.** L'installeur pose l'application dans
+`%LOCALAPPDATA%\Scripta` et le cœur range ses données dans
+`%LOCALAPPDATA%\scripta` : Windows ignorant la casse, **c'est le même
+répertoire**. Les modèles téléchargés y cohabitent donc avec les fichiers
+installés. Les sidecars mis à jour vont dans `bin/`, un sous-répertoire, de
+sorte qu'ADR-004 tient ; mais ce qu'emporte une désinstallation n'a pas été
+éprouvé — l'essai détruirait les modèles de la machine d'essai.
+
+---
+
+
 ### Premier lancement sous Linux — 2026-09-25
 
 WSL2, Ubuntu 26.04.1, WSLg. AppImage de la v0.1.1, telle que la CI la produit.

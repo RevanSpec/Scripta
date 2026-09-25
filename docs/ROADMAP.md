@@ -346,7 +346,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 - [ ] Un tag produit les artefacts de la matrice [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) révisée — CLI et GUI sur les trois OS, et leur variante Vulkan sous Windows et Linux —, publiés avec leurs sommes de contrôle.
 - [ ] Le `.dmg` s'installe et se lance sur un **Mac vierge** (Apple Silicon), ~~sans avertissement Gatekeeper~~ par la procédure du README : sans signature, Gatekeeper avertit.
-- [ ] `update-extractor` fonctionne sur l'application **installée** ~~et signée~~ des trois plateformes — c'est le test qui valide [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), et il **ne peut pas** être fait en mode développement.
+- [ ] `update-extractor` fonctionne sur l'application **installée** ~~et signée~~ des trois plateformes — c'est le test qui valide [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), et il **ne peut pas** être fait en mode développement. *(**Windows : fait** le 2026-09-25 sur l'installeur NSIS — le binaire mis à jour atterrit dans `bin/` et l'interface le marque « mis à jour » ; voir [VERIFICATION](VERIFICATION.md). Linux et macOS : restent.)*
 - [ ] La CLI démarre sur une machine **sans GPU ni driver** (validation de [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle)).
 - [ ] La tâche quotidienne s'exécute et alerte correctement.
 

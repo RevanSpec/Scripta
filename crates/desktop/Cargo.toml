@@ -24,3 +24,13 @@ serde_json.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
+
+# ADR-001 révisé (J0) : le backend est lié à la compilation, donc un
+# artefact par backend. Ces relais existent pour que la variante se demande
+# au binaire qu'on construit, et non par `scripta-core/vulkan` glissé à la
+# ligne de commande — qui marche, mais ne se lit nulle part.
+[features]
+default = []
+vulkan = ["scripta-core/vulkan"]
+cuda = ["scripta-core/cuda"]
+metal = ["scripta-core/metal"]
