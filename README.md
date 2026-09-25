@@ -79,6 +79,12 @@ vérifiez avec `scripta doctor`.
 > il est bloqué par Gatekeeper ; retirez l'attribut de quarantaine avec
 > `xattr -d com.apple.quarantine scripta`.
 
+> **Sous Linux, en environnement dépouillé.** L'AppImage embarque son moteur de
+> rendu, mais pas les bibliothèques graphiques : celles-ci doivent venir du
+> système. Une session de bureau les fournit ; un conteneur, un serveur sans
+> écran ou un WSL minimal, non — la fenêtre s'ouvre alors vide. Il y manque en
+> général `libGLESv2`, que `sudo apt install libgles2` installe.
+
 Les binaires sont compilés pour le CPU. Pour un GPU, compilez depuis les
 sources.
 
