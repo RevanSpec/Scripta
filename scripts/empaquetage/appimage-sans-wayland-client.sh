@@ -31,7 +31,8 @@ decalage=$("$appimage" --appimage-offset)
 # autrement qu'à l'identique donnerait une AppImage que le runtime livré avec
 # elle ne saurait pas monter.
 compression=$(unsquashfs -s -o "$decalage" "$appimage" | awk '/^Compression/ {print $2}')
-echo "  AppImage    : $appimage ($(stat -c %s "$appimage") octets)"
+avant=$(stat -c %s "$appimage")
+echo "  AppImage    : $appimage ($avant octets)"
 echo "  runtime     : $decalage octets, charge en $compression"
 
 unsquashfs -q -d "$travail/racine" -o "$decalage" "$appimage" >/dev/null
@@ -46,8 +47,18 @@ fi
 rm -f "$travail/racine/usr/lib/libwayland-client.so.0"
 
 head -c "$decalage" "$appimage" >"$travail/runtime.bin"
-mksquashfs "$travail/racine" "$travail/charge.sqfs" \
-    -root-owned -noappend -comp "$compression" -no-progress -quiet
+# mksquashfs ne recompresse pas au niveau d'appimagetool, et son défaut varie
+# d'une version à l'autre : sur le coureur Ubuntu 22.04, le paquet réassemblé
+# gagnait 1,2 Mo. Le niveau est donc fixé. Il ne vaut que pour zstd — gzip
+# plafonne à 9 —, de sorte qu'un changement de compresseur en amont ferait
+# échouer mksquashfs plutôt que de passer inaperçu.
+# Il subsiste 0,2 % d'écart sur le coureur, qui n'a pas été expliqué ; le
+# journal l'affiche, de sorte qu'une dérive plus large se verrait.
+if [ "$compression" = zstd ]; then
+    mksquashfs "$travail/racine" "$travail/charge.sqfs" -root-owned -noappend -comp zstd -Xcompression-level 19 -no-progress -quiet
+else
+    mksquashfs "$travail/racine" "$travail/charge.sqfs" -root-owned -noappend -comp "$compression" -no-progress -quiet
+fi
 cat "$travail/runtime.bin" "$travail/charge.sqfs" >"$travail/corrigee.AppImage"
 chmod +x "$travail/corrigee.AppImage"
 
@@ -68,6 +79,7 @@ for attendue in libwayland-cursor.so.0 libwayland-egl.so.1 libwayland-server.so.
 done
 
 mv "$travail/corrigee.AppImage" "$appimage"
-echo "  réassemblée : $(stat -c %s "$appimage") octets"
+apres=$(stat -c %s "$appimage")
+echo "  réassemblée : $apres octets, soit $(( (apres - avant) / 1024 )) Kio d'écart"
 echo "  conservées  : $restantes"
 echo "[OK] libwayland-client.so.0 retirée."

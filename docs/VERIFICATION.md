@@ -542,16 +542,39 @@ sur un système sans compositeur.
 
 **Correctif.** `scripts/empaquetage/appimage-sans-wayland-client.sh`, appelé
 après l'empaquetage : il désassemble l'AppImage, retire ce seul fichier, la
-réassemble avec la même compression, et vérifie le produit fini. Le script
-s'arrête de lui-même si le bundler cesse un jour d'embarquer cette
-bibliothèque, plutôt que de laisser croire le défaut corrigé.
+réassemble, et vérifie le produit fini. Le script s'arrête de lui-même si le
+bundler cesse un jour d'embarquer cette bibliothèque, plutôt que de laisser
+croire le défaut corrigé.
 
-**Ce qui reste à voir.** L'application corrigée va plus loin — EGL s'initialise
-—, puis s'arrête sur `libGLESv2.so.2`, absente de cette Ubuntu minimale et non
-embarquée. Toute session de bureau la fournit, mais un environnement dépouillé
-non : `sudo apt install libgles2`. **L'interface n'a donc encore jamais été vue
-sous Linux** ; seuls son démarrage, ses sidecars et son édition de liens le
-sont.
+**Taille du paquet réassemblé.** Réassembler recompresse, et le défaut de
+`mksquashfs` varie d'une version à l'autre. Mesures sur la v0.1.1 :
+
+| Paquet | Taille | Écart |
+|---|---|---|
+| Produit par `appimagetool`, coureur Ubuntu 22.04 | 125 102 584 o | — |
+| Réassemblé au défaut de squashfs-tools 4.5 (le coureur) | 126 290 424 o | **+1,2 Mo** |
+| Réassemblé au niveau 19, même coureur | 125 385 208 o | **+276 Kio** |
+| Produit par `appimagetool`, paquet de la v0.1.1 | 125 073 912 o | — |
+| Réassemblé au niveau 19, squashfs-tools 4.7 (machine d'essai) | 123 820 536 o | **−1,2 Mo** |
+
+Fixer le niveau ramène donc l'écart de 1 % à 0,2 % sur le coureur, et le rend
+négatif sur une version plus récente de l'outil. **Le reliquat de 276 Kio n'a
+pas été expliqué** : le bloc du squashfs d'origine est le défaut (131 072), ce
+n'est donc pas lui ; à cette échelle, la recherche n'en valait pas la peine.
+L'écart s'écrit au journal de la construction, de sorte qu'une dérive se
+verrait — c'est ainsi que le gonflement de 1,2 Mo a été repéré.
+
+**L'interface, enfin.** Corrigée, l'AppImage butait encore sur
+`libGLESv2.so.2` : absente de cette Ubuntu minimale, elle n'est pas non plus
+embarquée — toute session de bureau la fournit, un environnement dépouillé
+non (`sudo apt install libgles2`). Une fois cette bibliothèque posée,
+**l'interface s'affiche** — onglets, champ d'URL, réglages, en-tête
+« CPU · 6 threads », et aucun bandeau « introuvable » : les sidecars
+embarqués sont résolus. Éprouvé sur l'AppImage corrigée à la main, puis sur
+celle que la CI produit avec le correctif.
+
+**Non vérifié sous Linux :** l'onglet « Modèles et outils », et une
+transcription réelle de bout en bout. Seul le premier écran a été vu.
 
 ---
 
