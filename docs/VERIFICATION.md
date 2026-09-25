@@ -542,16 +542,24 @@ sur un système sans compositeur.
 
 **Correctif.** `scripts/empaquetage/appimage-sans-wayland-client.sh`, appelé
 après l'empaquetage : il désassemble l'AppImage, retire ce seul fichier, la
-réassemble avec la même compression, et vérifie le produit fini. Le script
+réassemble, et vérifie le produit fini. Le niveau de compression y est fixé,
+le défaut de `mksquashfs` variant d'une version à l'autre : sur le coureur
+Ubuntu 22.04 il gonflait le paquet de 1,2 Mo, quand le niveau 19 le rend au
+contraire 1,2 Mo plus léger que ce que produit `appimagetool`. Le script
 s'arrête de lui-même si le bundler cesse un jour d'embarquer cette
 bibliothèque, plutôt que de laisser croire le défaut corrigé.
 
-**Ce qui reste à voir.** L'application corrigée va plus loin — EGL s'initialise
-—, puis s'arrête sur `libGLESv2.so.2`, absente de cette Ubuntu minimale et non
-embarquée. Toute session de bureau la fournit, mais un environnement dépouillé
-non : `sudo apt install libgles2`. **L'interface n'a donc encore jamais été vue
-sous Linux** ; seuls son démarrage, ses sidecars et son édition de liens le
-sont.
+**L'interface, enfin.** Corrigée, l'AppImage butait encore sur
+`libGLESv2.so.2` : absente de cette Ubuntu minimale, elle n'est pas non plus
+embarquée — toute session de bureau la fournit, un environnement dépouillé
+non (`sudo apt install libgles2`). Une fois cette bibliothèque posée,
+**l'interface s'affiche** — onglets, champ d'URL, réglages, en-tête
+« CPU · 6 threads », et aucun bandeau « introuvable » : les sidecars
+embarqués sont résolus. Éprouvé sur l'AppImage corrigée à la main, puis sur
+celle que la CI produit avec le correctif.
+
+**Non vérifié sous Linux :** l'onglet « Modèles et outils », et une
+transcription réelle de bout en bout. Seul le premier écran a été vu.
 
 ---
 
