@@ -270,7 +270,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ### Critères de sortie
 
-- [ ] `cargo tauri dev` fonctionne sur les trois plateformes. *(Windows : éprouvé. **Linux : l'AppImage démarre, la fenêtre s'ouvre et les sidecars embarqués s'exécutent — mais l'interface n'a pas encore été vue, le rendu butant sur R13 puis sur une bibliothèque absente de l'hôte d'essai ; voir [VERIFICATION](VERIFICATION.md).** macOS : le crate compile et ses tests passent en CI, mais l'application n'y a pas été lancée.)*
+- [ ] `cargo tauri dev` fonctionne sur les trois plateformes. *(Windows : éprouvé, installeur compris. **Linux : éprouvé — l'AppImage démarre, les sidecars embarqués s'exécutent et l'interface s'affiche, après le correctif R13 et l'ajout de `libgles2` sur un hôte dépouillé ; voir [VERIFICATION](VERIFICATION.md).** macOS : le crate compile et ses tests passent en CI, mais l'application n'y a pas été lancée.)*
 - [x] **La fenêtre reste réactive du début à la fin** d'une transcription d'une heure : aucun gel, l'annulation reste cliquable en permanence. *(61 min, build optimisée : onglets, options et défilement répondent pendant l'extraction comme pendant l'inférence.)*
 - [x] L'annulation en cours d'inférence libère les ressources en moins de 2 s. *(Moins d'une demi-seconde, même en build de débogage. Sur la vidéo d'une heure, la mémoire retombe de 881 à 181 Mo dans la seconde ; seul le modèle reste chargé.)*
 - [ ] L'accélération affichée correspond au matériel réel sur au moins deux configurations distinctes. *(Une seule configuration éprouvée, CPU : aucune machine GPU de test.)*
