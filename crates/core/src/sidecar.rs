@@ -68,6 +68,14 @@ impl Kind {
                 "yt-dlp.exe"
             } else if cfg!(target_os = "macos") {
                 "yt-dlp_macos"
+            } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+                // L'exécutable autonome, celui qu'embarque l'application.
+                // `yt-dlp` tout court est une archive Python : il lui faut un
+                // interpréteur du système, absent d'un poste ordinaire et
+                // hors d'atteinte depuis l'AppImage.
+                "yt-dlp_linux"
+            } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+                "yt-dlp_linux_aarch64"
             } else {
                 "yt-dlp"
             }),
@@ -220,17 +228,43 @@ pub fn update_ytdlp(progress: crate::models::ProgressFn<'_>) -> Result<PathBuf> 
     })?;
     let destination = dir.join(Kind::YtDlp.file_name());
 
+    // Téléchargé à côté, puis essayé : la copie utilisateur passe avant la
+    // copie embarquée (ADR-004), et une copie qui ne s'exécute pas ici la
+    // masquerait — l'extraction deviendrait impossible, par la faute même
+    // de la mise à jour censée la rétablir.
+    let essai = dir.join(format!("yt-dlp-essai{}", std::env::consts::EXE_SUFFIX));
     crate::models::download_verified(
         &format!("{GITHUB_LATEST}/{asset}"),
-        &destination,
+        &essai,
         &attendu,
         progress,
         None,
     )?;
 
-    make_executable(&destination)?;
+    install_if_runnable(&essai, &destination, Kind::YtDlp)?;
     forget_pending_update();
     Ok(destination)
+}
+
+/// Installe `essai` à la place de `destination`, s'il s'exécute ici.
+///
+/// Sinon, l'essai est supprimé et la copie en place conservée.
+fn install_if_runnable(essai: &Path, destination: &Path, kind: Kind) -> Result<String> {
+    make_executable(essai)?;
+    let Some(version) = version_of(essai, kind) else {
+        let _ = std::fs::remove_file(essai);
+        return Err(ScriptaError::ExtractionFailed {
+            detail: format!(
+                "la version téléchargée de {} ne s'exécute pas sur ce système ; la copie en place est conservée",
+                kind.name()
+            ),
+        });
+    };
+    std::fs::rename(essai, destination).map_err(|source| ScriptaError::OutputFailed {
+        path: destination.to_path_buf(),
+        source,
+    })?;
+    Ok(version)
 }
 
 /// Relève l'empreinte attendue dans le fichier `SHA2-256SUMS` de la release.
@@ -535,7 +569,10 @@ mod tests {
     fn analyse_le_fichier_de_sommes() {
         let contenu = "1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6  yt-dlp\n\
                        66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a  yt-dlp.exe\n\
-                       072aad4f2a7604e92155f61a275a4752dc64046c8f6d90df3710525d94cd37c1  yt-dlp.tar.gz\n";
+                       072aad4f2a7604e92155f61a275a4752dc64046c8f6d90df3710525d94cd37c1  yt-dlp.tar.gz\n\
+                       58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a  yt-dlp_linux\n\
+                       0000000000000000000000000000000000000000000000000000000000000001  yt-dlp_linux_aarch64\n\
+                       0000000000000000000000000000000000000000000000000000000000000002  yt-dlp_linux.zip\n";
 
         assert_eq!(
             parse_sums(contenu, "yt-dlp.exe").as_deref(),
@@ -546,6 +583,11 @@ mod tests {
         assert_eq!(
             parse_sums(contenu, "yt-dlp").as_deref(),
             Some("1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6")
+        );
+        // Ni `yt-dlp_linux_aarch64` ni l'archive `yt-dlp_linux.zip`.
+        assert_eq!(
+            parse_sums(contenu, "yt-dlp_linux").as_deref(),
+            Some("58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a")
         );
         assert!(parse_sums(contenu, "yt-dlp_macos").is_none());
         assert!(parse_sums("", "yt-dlp").is_none());
@@ -564,11 +606,36 @@ mod tests {
             assert_eq!(a, "yt-dlp.exe");
         } else if cfg!(target_os = "macos") {
             assert_eq!(a, "yt-dlp_macos");
-        } else {
-            assert_eq!(a, "yt-dlp");
+        } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            // L'exécutable autonome qu'embarque l'application, pas l'archive
+            // Python `yt-dlp` : celle-ci ne s'exécutait pas depuis l'AppImage.
+            assert_eq!(a, "yt-dlp_linux");
         }
         // ffmpeg n'est pas distribué par ce mécanisme.
         assert!(Kind::Ffmpeg.release_asset().is_none());
+    }
+
+    #[test]
+    fn une_mise_a_jour_qui_ne_s_execute_pas_est_refusee() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join(Kind::YtDlp.file_name());
+        std::fs::write(&destination, "copie en place").unwrap();
+        let essai = dir
+            .path()
+            .join(format!("yt-dlp-essai{}", std::env::consts::EXE_SUFFIX));
+        // Une archive Python sans interpréteur, un binaire d'une autre
+        // architecture : dans tous les cas, rien qui s'exécute ici.
+        std::fs::write(&essai, b"PK\x03\x04 pas un executable").unwrap();
+
+        let r = install_if_runnable(&essai, &destination, Kind::YtDlp);
+
+        assert!(matches!(r, Err(ScriptaError::ExtractionFailed { .. })));
+        assert!(!essai.exists(), "l'essai doit être supprimé");
+        assert_eq!(
+            std::fs::read_to_string(&destination).unwrap(),
+            "copie en place",
+            "la copie en place ne doit pas être touchée"
+        );
     }
 
     #[test]
