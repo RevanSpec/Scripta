@@ -1,0 +1,179 @@
+name: Veille de l'extraction
+
+# Tâche 4.7 — SPEC §5.5, risque R3 : YouTube casse régulièrement les
+# extracteurs, et la CI de PR, qui ne touche jamais le réseau, ne peut pas le
+# voir. Chaque jour, la CLI de main transcrit donc une vidéo de référence, avec
+# deux yt-dlp : celui qu'embarquent les installeurs, épinglé, et le dernier
+# publié. Un échec ouvre une issue — ou la complète —, un succès la referme.
+#
+#   épinglé en échec, dernier en succès  → monter l'épingle (versions.env) ;
+#                                           les utilisateurs, eux, ont
+#                                           « Mettre à jour ».
+#   les deux en échec                    → YouTube a cassé yt-dlp lui-même :
+#                                           attendre son correctif.
+#
+# Lancement manuel : `simuler_echec` sonde une vidéo inexistante, pour éprouver
+# l'alerte de bout en bout.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      simuler_echec:
+        description: "Sonder une vidéo inexistante, pour éprouver l'alerte"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - ".github/workflows/veille.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # « Me at the zoo », 19 s : la première vidéo de YouTube, stable depuis 2005.
+  VIDEO: https://www.youtube.com/watch?v=jNQXAC9IVRw
+  # Un identifiant bien formé qui ne désigne aucune vidéo.
+  VIDEO_INEXISTANTE: https://www.youtube.com/watch?v=aaaaaaaaaaa
+
+jobs:
+  veille:
+    name: yt-dlp ${{ matrix.ytdlp }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ytdlp: [épinglé, dernier]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prérequis natifs
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev ffmpeg
+
+      - name: Toolchain
+        run: rustup show
+
+      # La build d'un jour à l'autre ne change que si main change.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compilation
+        run: cargo build --release --locked -p scripta-cli
+
+      - name: yt-dlp ${{ matrix.ytdlp }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/yt"
+          if [ "${{ matrix.ytdlp }}" = "épinglé" ]; then
+            sh scripts/sidecars/fetch-ytdlp.sh x86_64-unknown-linux-gnu "$RUNNER_TEMP/yt"
+            mv "$RUNNER_TEMP/yt/scripta-yt-dlp-x86_64-unknown-linux-gnu" "$RUNNER_TEMP/yt/yt-dlp"
+          else
+            # Le dernier exécutable autonome, vérifié par le SHA2-256SUMS de
+            # sa propre release.
+            base=https://github.com/yt-dlp/yt-dlp/releases/latest/download
+            curl -fsSL --retry 3 -o "$RUNNER_TEMP/yt/yt-dlp" "$base/yt-dlp_linux"
+            attendue=$(curl -fsSL --retry 3 "$base/SHA2-256SUMS" | awk '$2 == "yt-dlp_linux" {print $1}')
+            obtenue=$(sha256sum "$RUNNER_TEMP/yt/yt-dlp" | cut -d' ' -f1)
+            [ -n "$attendue" ] && [ "$attendue" = "$obtenue" ] || { echo "::error::Empreinte de yt-dlp_linux inattendue"; exit 1; }
+            chmod +x "$RUNNER_TEMP/yt/yt-dlp"
+          fi
+          echo "yt-dlp $("$RUNNER_TEMP/yt/yt-dlp" --version)"
+
+      # Le modèle `tiny` et le VAD, gardés d'un jour à l'autre : la veille
+      # porte sur YouTube, pas sur HuggingFace.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/scripta-veille/modeles
+          key: veille-modeles-${{ hashFiles('crates/core/src/models.rs') }}
+
+      - name: Transcription de la vidéo de référence
+        id: transcription
+        shell: bash
+        env:
+          SCRIPTA_NO_UPDATE_CHECK: "1"
+        run: |
+          export SCRIPTA_MODELS_DIR="$HOME/.cache/scripta-veille/modeles"
+          url=$VIDEO
+          if [ "${{ inputs.simuler_echec }}" = "true" ]; then
+            echo "::warning::Échec simulé : vidéo inexistante."
+            url=$VIDEO_INEXISTANTE
+          fi
+          set +e
+          target/release/scripta --no-cache -m tiny -l en -f json -o sortie.json --force \
+            --ytdlp-path "$RUNNER_TEMP/yt/yt-dlp" --ffmpeg-path "$(command -v ffmpeg)" \
+            "$url" 2> journal.txt
+          code=$?
+          set -e
+          cat journal.txt
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          {
+            echo "### yt-dlp ${{ matrix.ytdlp }} — $("$RUNNER_TEMP/yt/yt-dlp" --version)"
+            echo
+            echo "Code de sortie : \`$code\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Code 12 : YouTube exige une connexion, ce qui, pour cette vidéo,
+          # signifie une vérification anti-robot. Elle vise l'adresse de la
+          # machine de CI, pas yt-dlp : la veille ne conclut pas, sans alerter.
+          if [ "$code" = 12 ]; then
+            echo "::warning::YouTube a refusé la machine de CI (vérification anti-robot) : veille non concluante."
+            echo "YouTube a refusé la machine de CI : **non concluant**." >> "$GITHUB_STEP_SUMMARY"
+            touch non-concluant
+            exit 0
+          fi
+          if [ "$code" != 0 ]; then
+            echo "::error::Extraction en échec, code $code."
+            exit 1
+          fi
+          # Le texte, pas seulement le code : une transcription vide ou
+          # hors sujet serait une rupture silencieuse.
+          if ! python3 -c "import json,sys; t=' '.join(s['text'] for s in json.load(open('sortie.json'))['segments']).lower(); sys.exit(0 if 'elephant' in t else 1)"; then
+            echo "::error::La transcription ne mentionne pas l'éléphant de la vidéo."
+            exit 1
+          fi
+          echo "Transcription conforme." >> "$GITHUB_STEP_SUMMARY"
+
+      # Un jour non concluant ne doit pas refermer l'issue d'un vrai échec.
+      - uses: actions/upload-artifact@v4
+        if: steps.transcription.outputs.code == '12'
+        with:
+          name: non-concluant-${{ strategy.job-index }}
+          path: non-concluant
+
+  alerte:
+    name: Alerte
+    needs: veille
+    # Jamais depuis une PR : la veille y est seulement éprouvée.
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: non-concluant-*
+          path: marques
+
+      - name: Issue de veille
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULTAT: ${{ needs.veille.result }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          titre="Veille : l'extraction YouTube échoue"
+          ouverte=$(gh issue list --state open --label veille --json number --jq '.[0].number // empty')
+          if [ "$RESULTAT" = failure ]; then
+            gh label create veille --color B60205 --description "Alertes de la veille quotidienne" --force
+            corps="La veille du $(date -u +%F) a échoué : $RUN
+
+          Voir le résumé du run : la ligne « épinglé » dit si les installeurs sont touchés, la ligne « dernier » si yt-dlp l'est lui-même."
+            if [ -n "$ouverte" ]; then
+              gh issue comment "$ouverte" --body "$corps"
+            else
+              gh issue create --title "$titre" --label veille --body "$corps"
+            fi
+          elif [ -n "$(ls -A marques 2>/dev/null)" ]; then
+            echo "Veille non concluante : l'issue éventuelle reste ouverte."
+          elif [ "$RESULTAT" = success ] && [ -n "$ouverte" ]; then
+            gh issue close "$ouverte" --comment "La veille du $(date -u +%F) passe de nouveau : $RUN"
+          fi
