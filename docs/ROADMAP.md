@@ -1,7 +1,7 @@
 # Scripta — Roadmap d'intégration
 
-**Version :** 1.4
-**Référence :** [SPEC.md](SPEC.md) v2.4
+**Version :** 1.5
+**Référence :** [SPEC.md](SPEC.md) v2.5
 
 ---
 
@@ -34,7 +34,10 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ## Jalon 0 — Dérisquage
 
-> **Statut : partiellement clos.** Les spikes 0.1 et 0.3 ont été menés par
+> **Statut : clos** le 2026-09-28, l'inférence ayant enfin tourné sous
+> Linux.
+>
+> Les spikes 0.1 et 0.3 ont été menés par
 > inspection de l'API de `whisper-rs` 0.16 et tentative de compilation, et le
 > spike 0.2 est **entièrement couvert** par les tests d'intégration permanents
 > de `crates/core/tests/pipeline.rs` — y compris le test de non-régression de
@@ -50,6 +53,11 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 > exécute le pipeline sur les trois OS, mais ses tests d'inférence se sautent
 > faute de modèle — la CI de PR n'a pas accès au réseau. La tâche planifiée
 > quotidienne (4.7) la couvrira.
+>
+> **Point au 2026-09-28.** C'est fait, sans attendre la 4.7 : la CLI Linux
+> construite par la CI a transcrit la vidéo de référence d'une heure dans
+> WSL2, sous Ubuntu 26.04 — 18,4 × temps réel, 846 Mo de crête. Voir
+> [VERIFICATION](VERIFICATION.md).
 
 **Objectif :** valider ou invalider les hypothèses de l'[Annexe D](SPEC.md#annexe-d--points-à-valider-en-implémentation) avant tout investissement structurel. Le code produit ici est **jetable** et ne sera pas repris.
 
@@ -66,7 +74,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ### Critères de sortie
 
-- [ ] Les spikes A et B compilent et s'exécutent sur **Windows et au moins une plateforme Unix**. *(Compilation : trois OS. Pipeline (B) : exécuté sur les trois OS en CI. Inférence (A) : exécutée sous Windows seulement.)*
+- [x] Les spikes A et B compilent et s'exécutent sur **Windows et au moins une plateforme Unix**. *(Compilation : trois OS. Pipeline (B) : exécuté sur les trois OS en CI. Inférence (A) : sous Windows depuis le J1, **sous Linux le 2026-09-28** — la CLI construite par la CI, dans WSL2.)*
 - [x] La version de `whisper-rs` est **figée**, avec justification écrite au regard des quatre callbacks requis. *(`=0.16.0` depuis le J2 ; justification dans `crates/core/Cargo.toml` : `set_abort_callback_safe` contourné, VAD intégré inopérant par cette voie — voir R10.)*
 - [x] L'[ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) est confirmé, ou le repli « deux artefacts par plateforme » est acté et sa conséquence reportée sur le [Jalon 4](#jalon-4--packaging-et-cicd). *(Repli acté ; le J4 compte désormais les variantes Vulkan.)*
 - [x] L'[Annexe D](SPEC.md#annexe-d--points-à-valider-en-implémentation) ne contient plus d'hypothèse non tranchée. *(Deux mesures restent à faire — performance Vulkan, taille d'une build FFmpeg minimale. Elles sont explicitement reportées au J4, chacune avec son repli.)*
@@ -270,7 +278,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ### Critères de sortie
 
-- [ ] `cargo tauri dev` fonctionne sur les trois plateformes. *(Windows : éprouvé, installeur compris. **Linux : éprouvé — l'AppImage démarre, les sidecars embarqués s'exécutent et l'interface s'affiche, après le correctif R13 et l'ajout de `libgles2` sur un hôte dépouillé ; voir [VERIFICATION](VERIFICATION.md).** macOS : le crate compile et ses tests passent en CI, mais l'application n'y a pas été lancée.)*
+- [ ] `cargo tauri dev` fonctionne sur les trois plateformes. *(Windows : éprouvé, installeur compris. **Linux : éprouvé — l'AppImage démarre, les sidecars embarqués s'exécutent et l'interface s'affiche, après le correctif R13 et l'ajout de `libgles2` sur un hôte dépouillé ; voir [VERIFICATION](VERIFICATION.md).** Le 2026-09-28, sur un second poste, l'onglet « Modèles et outils » et la sonde répondent, mais la transcription a révélé **R14** : l'application de la répétition générale meurt sur « Illegal instruction ». À refaire sur une build corrigée. macOS : le crate compile et ses tests passent en CI, mais l'application n'y a pas été lancée.)*
 - [x] **La fenêtre reste réactive du début à la fin** d'une transcription d'une heure : aucun gel, l'annulation reste cliquable en permanence. *(61 min, build optimisée : onglets, options et défilement répondent pendant l'extraction comme pendant l'inférence.)*
 - [x] L'annulation en cours d'inférence libère les ressources en moins de 2 s. *(Moins d'une demi-seconde, même en build de débogage. Sur la vidéo d'une heure, la mémoire retombe de 881 à 181 Mo dans la seconde ; seul le modèle reste chargé.)*
 - [x] L'accélération affichée correspond au matériel réel sur au moins deux configurations distinctes. *(Mesuré le 2026-09-25 sur la vidéo de référence : **CPU 12,1 ×**, **Vulkan sur RTX 3070 42,2 ×**, soit 3,5 × — et la vitesse annoncée par Scripta est bien celle de l'inférence mesurée. **Réserve :** la machine était à 36 % de charge au départ, ce qui pénalise le CPU ; rapportée au relevé du J3 sur machine au repos (15,8 ×), l'accélération serait de 2,7 ×. Voir [VERIFICATION](VERIFICATION.md).)*
@@ -310,6 +318,11 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 >   autonome embarque Python, 40 Mo sous Linux —, et l'AppImage, WebKitGTK.
 > - **4.6** Sommes de contrôle, notes de version, versions des sidecars, et
 >   l'archive source de FFmpeg, que la LGPL impose de distribuer.
+> - **R14** Les binaires distribués s'en tiennent à la base AVX2 d'ADR-001 :
+>   compilation native écartée (`GGML_NATIVE=OFF`), et jeu d'instructions
+>   contrôlé à chaque build. **La v0.1.1 pour Linux porte le défaut** : sans
+>   AVX-512, elle meurt sur « Illegal instruction » au chargement du modèle.
+>   Aucun téléchargement au 2026-09-28.
 >
 > Restent :
 >
@@ -414,6 +427,7 @@ Aucune de ces tâches ne conditionne la v1.0.
 | R11 | **Boucle de répétition entretenue par le contexte glissant, révélée par le VAD** | Moyen | **Avérée — contournée** | J2 | Sur la vidéo de référence, VAD actif : 71 segments consécutifs « et qui est en train de se faire », de 2 240 à 2 395 s — 155 s de parole perdues, là où la mesure sans VAD n'en montrait aucune. Non reproduite sur un extrait de 700 s : elle dépend du contexte accumulé depuis le début. **Évaluée sur la vidéo entière :** sans contexte glissant (`n_max_text_ctx = 0`), la boucle disparaît — pire série, 7 segments bornés à leur fenêtre —, la concordance passe de 73 à 75 % et le débit de 6,9 à 8,0×. **Contournement :** en mode VAD, aucune fenêtre n'est conditionnée sur les précédentes. **Limite :** avec `--initial-prompt`, le contexte glissant est conservé, car whisper.cpp fait passer l'invite par le même canal et whisper-rs 0.16 n'expose pas `carry_initial_prompt` ; le risque demeure dans ce cas. Les entrées de cache VAD antérieures sont écartées |
 | R12 | **Effondrement du débit quand un thread d'inférence est privé de processeur** | Élevé | **Avérée — corrigée** | J3 | ggml synchronise ses threads par attente active. Avec un thread par cœur logique — le défaut du J2 —, une application voisine occupant un seul cœur a fait tomber l'inférence à **0,2 ×** le temps réel sur un i7-13700H (14 cœurs, 20 threads logiques), contre 12 × avec 16 threads. Révélé par l'acceptation de la GUI ; la CLI y était tout aussi exposée. **Correctif :** par défaut, les cœurs physiques, en laissant au moins deux threads logiques libres (`num_cpus`), comme le prévoyait la SPEC. Sans charge voisine, le débit culmine justement aux cœurs physiques ; la vidéo de référence passe de 6,4 à 15,8 × en CLI, 14,0 × dans l'application de bureau |
 | R13 | **L'AppImage embarque une `libwayland-client` qui empêche l'affichage sur un hôte récent** | Élevé | **Avérée — corrigée** | J4 | linuxdeploy embarque la bibliothèque de la machine de build (Ubuntu 22.04) ; l'AppRun la place devant celle du système, et `libEGL_mesa.so.0`, qui en dépend, ne s'initialise plus. WebKit abandonne son processus de rendu : **la fenêtre s'ouvre vide, sans message**. Isolée par bissection sur les 169 bibliothèques embarquées, le 2026-09-25 sous Ubuntu 26.04. **Correctif :** `scripts/empaquetage/appimage-sans-wayland-client.sh` la retire après l'empaquetage et contrôle le produit fini, en s'arrêtant si le bundler cesse de l'embarquer. Défaut invisible sur la machine de build, dont la bibliothèque est justement celle qui est embarquée : **seul un hôte différent le révèle** |
+| R14 | **Binaires distribués compilés pour le processeur de la machine de CI** | Élevé | **Avérée — corrigée** | J4 | ggml se compile par défaut pour la machine de build (`GGML_NATIVE`), et les machines de GitHub Actions varient d'un job à l'autre. L'AVX-512 de l'une d'elles est entré dans la CLI Linux publiée de la v0.1.1 : **6 217 instructions**, et « Illegal instruction » dès le chargement du modèle sur un i7-13700H, qui n'en a pas. Même loterie pour l'application Windows d'une répétition générale (4 838), quand une autre en avait 26 — celles de `crc32fast`, choisies à l'exécution. Révélé le 2026-09-28 par la première transcription de l'application sous Linux. **Correctif :** `GGML_NATIVE=OFF` dans le workflow de release — whisper-rs-sys transmet à CMake les variables `GGML_*` —, d'où la base AVX2 d'ADR-001 ; et `scripts/empaquetage/jeu-instructions.sh` refuse tout binaire x86-64 qui porte de l'AVX-512 ou manque d'AVX2. Même leçon que R13 : **la machine de build exécute sans peine ce qui échouera ailleurs** |
 
 ---
 

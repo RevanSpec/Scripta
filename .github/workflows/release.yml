@@ -24,6 +24,14 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Risque R14 (docs/ROADMAP.md) : ggml se compile par défaut pour le
+  # processeur de la machine de build, et les machines de GitHub n'ont pas
+  # toutes le même. L'AVX-512 de l'une d'elles est ainsi entré dans le binaire
+  # Linux de la v0.1.1, qui meurt sur « Illegal instruction » partout où il
+  # manque. whisper-rs-sys transmet à CMake toute variable GGML_* : sans
+  # compilation native, ggml retient la base AVX2 — AVX, AVX2, FMA, F16C,
+  # BMI2 —, celle qu'annonce ADR-001 ; sous macOS, le premier Apple Silicon.
+  GGML_NATIVE: "OFF"
 
 jobs:
   build:
@@ -119,6 +127,11 @@ jobs:
                 echo "::error::Le binaire exige le redistribuable Visual C++ : runtime statique non appliqué."
                 exit 1
               fi ;;
+          esac
+          # R14 : ni AVX-512, que la machine de build peut avoir et
+          # l'utilisateur non, ni moins que l'AVX2.
+          case "${{ matrix.target }}" in
+            x86_64-*) sh scripts/empaquetage/jeu-instructions.sh "$exe" ;;
           esac
 
       - name: Outil d'inventaire des licences
@@ -341,6 +354,16 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: sh scripts/empaquetage/appimage-sans-wayland-client.sh target/release/bundle/appimage
+
+      # R14, comme pour la CLI : la même loterie a donné 4 838 instructions
+      # AVX-512 à l'application Windows d'une répétition générale.
+      - name: Jeu d'instructions
+        if: startsWith(matrix.target, 'x86_64-')
+        shell: bash
+        run: |
+          exe=target/release/scripta-desktop
+          [ "$RUNNER_OS" = Windows ] && exe="$exe.exe"
+          sh scripts/empaquetage/jeu-instructions.sh "$exe"
 
       - name: Installeurs
         shell: bash
