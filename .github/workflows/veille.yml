@@ -12,15 +12,15 @@ name: Veille de l'extraction
 #   les deux en échec                    → YouTube a cassé yt-dlp lui-même :
 #                                           attendre son correctif.
 #
-# Lancement manuel : `simuler_echec` sonde une vidéo inexistante, pour éprouver
-# l'alerte de bout en bout.
+# Lancement manuel : `simuler_echec` remplace yt-dlp par /bin/false, pour
+# éprouver l'alerte de bout en bout.
 on:
   schedule:
     - cron: "17 5 * * *"
   workflow_dispatch:
     inputs:
       simuler_echec:
-        description: "Sonder une vidéo inexistante, pour éprouver l'alerte"
+        description: "Remplacer yt-dlp par /bin/false, pour éprouver l'alerte"
         type: boolean
         default: false
   pull_request:
@@ -34,8 +34,6 @@ env:
   CARGO_TERM_COLOR: always
   # « Me at the zoo », 19 s : la première vidéo de YouTube, stable depuis 2005.
   VIDEO: https://www.youtube.com/watch?v=jNQXAC9IVRw
-  # Un identifiant bien formé qui ne désigne aucune vidéo.
-  VIDEO_INEXISTANTE: https://www.youtube.com/watch?v=aaaaaaaaaaa
 
 jobs:
   veille:
@@ -93,15 +91,15 @@ jobs:
           SCRIPTA_NO_UPDATE_CHECK: "1"
         run: |
           export SCRIPTA_MODELS_DIR="$HOME/.cache/scripta-veille/modeles"
-          url=$VIDEO
+          ytdlp="$RUNNER_TEMP/yt/yt-dlp"
           if [ "${{ inputs.simuler_echec }}" = "true" ]; then
-            echo "::warning::Échec simulé : vidéo inexistante."
-            url=$VIDEO_INEXISTANTE
+            echo "::warning::Échec simulé : yt-dlp remplacé par /bin/false."
+            ytdlp=/bin/false
           fi
           set +e
           target/release/scripta --no-cache -m tiny -l en -f json -o sortie.json --force \
-            --ytdlp-path "$RUNNER_TEMP/yt/yt-dlp" --ffmpeg-path "$(command -v ffmpeg)" \
-            "$url" 2> journal.txt
+            --ytdlp-path "$ytdlp" --ffmpeg-path "$(command -v ffmpeg)" \
+            "$VIDEO" 2> journal.txt
           code=$?
           set -e
           cat journal.txt
