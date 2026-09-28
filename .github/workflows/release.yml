@@ -106,6 +106,15 @@ jobs:
       - name: Toolchain
         run: rustup show
 
+      # Annexe E : avec Vulkan, whisper.cpp ajoute près de 160 caractères de
+      # chemin sous Windows, et le traceur de MSBuild n'en tolère pas plus de
+      # 260 — même depuis D:\a\Scripta\Scripta, il échoue (FTK1011). Un
+      # répertoire de sortie court y remédie.
+      - name: Répertoire de sortie court (Windows, Vulkan)
+        if: matrix.variante == 'vulkan' && runner.os == 'Windows'
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=C:/t" >> "$GITHUB_ENV"
+
       # ADR-001 révisé, tâche 4.3 : la variante Vulkan se compile avec le SDK,
       # épinglé et vérifié comme les sidecars (scripts/empaquetage/vulkan.env).
       - name: SDK Vulkan
@@ -113,11 +122,13 @@ jobs:
         shell: bash
         run: sh scripts/empaquetage/sdk-vulkan.sh ${{ matrix.target }} "$RUNNER_TEMP/vulkan"
 
-      # Le démarrage de la variante Vulkan, que le contrôle ci-dessous exige,
-      # veut un chargeur Vulkan : sans GPU, celui du paquet suffit.
+      # L'archive du SDK ne fournit pas le chargeur Vulkan : on se lie à celui
+      # d'Ubuntu 22.04, le plus ancien de la cible — un binaire lié à lui
+      # démarre avec tout chargeur plus récent. Le test de démarrage s'en sert
+      # aussi, sans GPU.
       - name: Chargeur Vulkan (Linux)
         if: matrix.variante == 'vulkan' && runner.os == 'Linux'
-        run: sudo apt-get install -y libvulkan1
+        run: sudo apt-get install -y libvulkan-dev
 
       # Pas de cache : un artefact publié se construit depuis zéro, sans rien
       # hériter d'une build précédente.
@@ -128,7 +139,7 @@ jobs:
         id: binaire
         shell: bash
         run: |
-          exe=target/release/scripta
+          exe=${CARGO_TARGET_DIR:-target}/release/scripta
           [ "$RUNNER_OS" = Windows ] && exe="$exe.exe"
           "$exe" --help > /dev/null
           version=$("$exe" --version | awk '{print $2}')
@@ -309,10 +320,11 @@ jobs:
           sudo apt-get install -y cmake libclang-dev \
             libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev \
             libfuse2 file squashfs-tools
-          # linuxdeploy résout les dépendances du binaire : celle de la
-          # variante Vulkan comprise.
+          # Le chargeur Vulkan, que l'archive du SDK ne fournit pas : pour
+          # l'édition de liens, et pour linuxdeploy, qui résout les
+          # dépendances du binaire.
           if [ "${{ matrix.variante }}" = vulkan ]; then
-            sudo apt-get install -y libvulkan1
+            sudo apt-get install -y libvulkan-dev
           fi
 
       # Risque R9, comme pour la CLI. Runtime C dynamique ici : l'installeur
@@ -340,6 +352,15 @@ jobs:
 
       - name: Toolchain
         run: rustup show
+
+      # Annexe E : avec Vulkan, whisper.cpp ajoute près de 160 caractères de
+      # chemin sous Windows, et le traceur de MSBuild n'en tolère pas plus de
+      # 260 — même depuis D:\a\Scripta\Scripta, il échoue (FTK1011). Un
+      # répertoire de sortie court y remédie.
+      - name: Répertoire de sortie court (Windows, Vulkan)
+        if: matrix.variante == 'vulkan' && runner.os == 'Windows'
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=C:/t" >> "$GITHUB_ENV"
 
       # ADR-001 révisé, tâche 4.3 : la variante Vulkan se compile avec le SDK,
       # épinglé et vérifié comme les sidecars (scripts/empaquetage/vulkan.env).
@@ -411,7 +432,7 @@ jobs:
       - name: Correction de l'AppImage
         if: runner.os == 'Linux'
         shell: bash
-        run: sh scripts/empaquetage/appimage-sans-wayland-client.sh target/release/bundle/appimage
+        run: sh scripts/empaquetage/appimage-sans-wayland-client.sh "${CARGO_TARGET_DIR:-target}/release/bundle/appimage"
 
       # R14, comme pour la CLI : la même loterie a donné 4 838 instructions
       # AVX-512 à l'application Windows d'une répétition générale.
@@ -419,7 +440,7 @@ jobs:
         if: startsWith(matrix.target, 'x86_64-')
         shell: bash
         run: |
-          exe=target/release/scripta-desktop
+          exe=${CARGO_TARGET_DIR:-target}/release/scripta-desktop
           [ "$RUNNER_OS" = Windows ] && exe="$exe.exe"
           sh scripts/empaquetage/jeu-instructions.sh "$exe"
           if [ "${{ matrix.variante }}" = vulkan ]; then
@@ -430,7 +451,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          find target/release/bundle -maxdepth 2 -type f \
+          find "${CARGO_TARGET_DIR:-target}/release/bundle" -maxdepth 2 -type f \
             \( -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' \) \
             -exec cp {} dist/ \;
           # Même application, même identifiant : la variante Vulkan remplace
