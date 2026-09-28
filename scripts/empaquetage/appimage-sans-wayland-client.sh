@@ -1,7 +1,12 @@
 #!/bin/sh
 # Retire de l'AppImage la copie embarquée de libwayland-client.
 #
-#   scripts/empaquetage/appimage-sans-wayland-client.sh <répertoire du bundle>
+#   scripts/empaquetage/appimage-sans-wayland-client.sh <répertoire du bundle> [bibliothèque…]
+#
+# Les bibliothèques données en plus sont retirées de même : celles qui, comme
+# le chargeur Vulkan de la variante `vulkan` (libvulkan.so.1), doivent venir
+# du système. Le chargeur embarqué serait celui d'Ubuntu 22.04, placé devant
+# celui du pilote — le piège même de libwayland-client, ci-dessous.
 #
 # POURQUOI. linuxdeploy embarque libwayland-client.so.0 telle qu'elle est sur
 # la machine de build — Ubuntu 22.04, donc wayland 1.20. L'AppRun place
@@ -18,6 +23,8 @@
 # compositeur, où la retirer empêche l'application de démarrer.
 set -eu
 bundle=${1:?répertoire du bundle attendu}
+shift
+retirees="libwayland-client.so.0 $*"
 
 appimage=$(find "$bundle" -maxdepth 1 -type f -name '*.AppImage' | head -1)
 [ -n "$appimage" ] || { echo "[ÉCHEC] aucune AppImage dans $bundle" >&2; exit 1; }
@@ -40,11 +47,13 @@ unsquashfs -q -d "$travail/racine" -o "$decalage" "$appimage" >/dev/null
 # Garde-fou. Si la bibliothèque n'est plus embarquée, c'est que le bundler a
 # changé ; il vaut mieux casser la construction que retirer silencieusement
 # rien du tout et croire le défaut corrigé.
-if [ ! -e "$travail/racine/usr/lib/libwayland-client.so.0" ]; then
-    echo "[ÉCHEC] libwayland-client.so.0 n'est plus embarquée : cette étape n'a plus lieu d'être." >&2
-    exit 1
-fi
-rm -f "$travail/racine/usr/lib/libwayland-client.so.0"
+for lib in $retirees; do
+    if [ ! -e "$travail/racine/usr/lib/$lib" ]; then
+        echo "[ÉCHEC] $lib n'est plus embarquée : la retirer n'a plus lieu d'être." >&2
+        exit 1
+    fi
+    rm -f "$travail/racine/usr/lib/$lib"
+done
 
 head -c "$decalage" "$appimage" >"$travail/runtime.bin"
 # mksquashfs ne recompresse pas au niveau d'appimagetool, et son défaut varie
@@ -64,13 +73,15 @@ chmod +x "$travail/corrigee.AppImage"
 
 # Contrôle sur le produit fini, et non sur l'arborescence intermédiaire : c'est
 # le fichier livré qui doit se monter et avoir perdu la bonne bibliothèque.
+for lib in $retirees; do
+    ( cd "$travail" && ./corrigee.AppImage --appimage-extract "usr/lib/$lib" >/dev/null )
+    if [ -e "$travail/squashfs-root/usr/lib/$lib" ]; then
+        echo "[ÉCHEC] $lib est encore dans le paquet réassemblé." >&2
+        exit 1
+    fi
+done
 ( cd "$travail" && ./corrigee.AppImage --appimage-extract 'usr/lib/libwayland-*' >/dev/null )
 restantes=$(ls "$travail/squashfs-root/usr/lib" 2>/dev/null | tr '\n' ' ')
-case "$restantes" in
-    *libwayland-client.so.0*)
-        echo "[ÉCHEC] libwayland-client.so.0 est encore dans le paquet réassemblé." >&2
-        exit 1 ;;
-esac
 for attendue in libwayland-cursor.so.0 libwayland-egl.so.1 libwayland-server.so.0; do
     case "$restantes" in
         *"$attendue"*) ;;
@@ -82,4 +93,4 @@ mv "$travail/corrigee.AppImage" "$appimage"
 apres=$(stat -c %s "$appimage")
 echo "  réassemblée : $apres octets, soit $(( (apres - avant) / 1024 )) Kio d'écart"
 echo "  conservées  : $restantes"
-echo "[OK] libwayland-client.so.0 retirée."
+echo "[OK] retirées : $retirees"

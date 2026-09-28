@@ -71,6 +71,61 @@ impl Backend {
     }
 }
 
+/// GPU retenu pour l'inférence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gpu {
+    /// Rang parmi les GPU, dédiés et intégrés, dans l'ordre où whisper.cpp
+    /// les compte : c'est son paramètre `gpu_device`.
+    pub rank: c_int,
+    /// Nom que lui donne le pilote, « NVIDIA RTX A1000 6GB Laptop GPU ».
+    pub name: String,
+    /// Vrai pour un GPU dédié, faux pour une puce intégrée au processeur.
+    pub dedicated: bool,
+}
+
+/// Le GPU sur lequel tournera l'inférence : le premier **dédié**, à défaut le
+/// premier intégré ; `None` dans une build CPU.
+///
+/// whisper.cpp compte GPU dédiés et intégrés dans l'ordre du registre de
+/// ggml, et retient le premier par défaut. Or sur un portable hybride, Vulkan
+/// énumère d'abord la puce intégrée : relevé le 2026-09-28 sur un
+/// i7-13700H, l'Intel UHD en 0 et la RTX A1000 en 1 — la variante Vulkan
+/// tournait sur la première.
+pub fn preferred_gpu() -> Option<Gpu> {
+    use whisper_rs_sys as sys;
+
+    let mut rang: c_int = 0;
+    let mut integre = None;
+    // SAFETY : le registre de ggml s'initialise à la première interrogation,
+    // et ces fonctions ne lisent que des descripteurs qu'il garde à vie.
+    unsafe {
+        for i in 0..sys::ggml_backend_dev_count() {
+            let dev = sys::ggml_backend_dev_get(i);
+            let genre = sys::ggml_backend_dev_type(dev);
+            let dedie = genre == sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_GPU;
+            if !dedie && genre != sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_IGPU {
+                continue;
+            }
+            let description = sys::ggml_backend_dev_description(dev);
+            let gpu = Gpu {
+                rank: rang,
+                name: if description.is_null() {
+                    String::new()
+                } else {
+                    CStr::from_ptr(description).to_string_lossy().into_owned()
+                },
+                dedicated: dedie,
+            };
+            if dedie {
+                return Some(gpu);
+            }
+            integre.get_or_insert(gpu);
+            rang += 1;
+        }
+    }
+    integre
+}
+
 /// Paramètres d'inférence — SPEC SF-04.
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -323,6 +378,7 @@ impl Engine {
 
         let mut params = WhisperContextParameters::new();
         params.use_gpu(Backend::compiled().is_gpu());
+        params.gpu_device(preferred_gpu().map_or(0, |g| g.rank));
 
         let ctx = WhisperContext::new_with_params(model_path, params).map_err(|e| {
             ScriptaError::ModelUnavailable {
@@ -742,5 +798,22 @@ mod tests {
         let b = Backend::compiled();
         assert_eq!(b.is_gpu(), !matches!(b, Backend::Cpu));
         assert!(!b.as_str().is_empty());
+    }
+
+    #[test]
+    fn le_gpu_retenu_est_coherent() {
+        match preferred_gpu() {
+            // Une build CPU n'enregistre aucun GPU auprès de ggml.
+            None => {}
+            Some(gpu) => {
+                assert!(Backend::compiled().is_gpu(), "GPU vu par une build CPU");
+                assert!(gpu.rank >= 0);
+                // Un GPU dédié passe toujours avant les puces intégrées : il
+                // n'a de rang non nul que si des puces intégrées le précèdent.
+                if !gpu.dedicated {
+                    assert_eq!(gpu.rank, 0, "le premier intégré, faute de dédié");
+                }
+            }
+        }
     }
 }

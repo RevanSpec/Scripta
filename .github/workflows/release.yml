@@ -429,10 +429,16 @@ jobs:
       # échouer EGL : la fenêtre s'ouvre alors vide, sans message. Le script
       # dit le détail, et s'arrête de lui-même si le bundler cesse un jour
       # d'embarquer ce fichier.
+      #
+      # La variante Vulkan embarque de même le chargeur Vulkan de la machine
+      # de build, qui doit pourtant être celui du pilote : il est retiré aussi.
       - name: Correction de l'AppImage
         if: runner.os == 'Linux'
         shell: bash
-        run: sh scripts/empaquetage/appimage-sans-wayland-client.sh "${CARGO_TARGET_DIR:-target}/release/bundle/appimage"
+        run: |
+          supplementaires=""
+          [ "${{ matrix.variante }}" = vulkan ] && supplementaires=libvulkan.so.1
+          sh scripts/empaquetage/appimage-sans-wayland-client.sh "${CARGO_TARGET_DIR:-target}/release/bundle/appimage" $supplementaires
 
       # R14, comme pour la CLI : la même loterie a donné 4 838 instructions
       # AVX-512 à l'application Windows d'une répétition générale.
