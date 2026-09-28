@@ -16,10 +16,9 @@ much all it is to say
 
 ## État du projet
 
-**La CLI est publiée** — v0.1.1, pour Windows, Linux et macOS Apple Silicon.
-**L'application de bureau est empaquetée** : ses installeurs, qui embarquent
-yt-dlp et ffmpeg, seront joints à la prochaine version. D'ici là, elle se
-construit depuis les sources.
+**La v0.2.0 est publiée**, pour Windows, Linux et macOS Apple Silicon : la
+CLI, et pour la première fois l'application de bureau, dont les installeurs
+embarquent yt-dlp et ffmpeg.
 
 | | État |
 |---|---|
@@ -33,9 +32,9 @@ construit depuis les sources.
 | Sous-titres YouTube officiels | ✅ |
 | Cache de transcriptions | ✅ |
 | Mise à jour de l'extracteur | ✅ |
-| Binaires précompilés (CLI) | ✅ v0.1.1 — ⚠ Linux : exige par erreur l'AVX-512, corrigé à la prochaine version |
+| Binaires précompilés (CLI) | ✅ v0.2.0 |
 | Application de bureau | ✅ Windows · Linux : démarre, transcription à éprouver · macOS : jamais lancée |
-| Installeurs de l'application | 🚧 prêts, non signés — à la prochaine version |
+| Installeurs de l'application | ✅ v0.2.0, non signés |
 | Accélération GPU | ⏳ Vulkan éprouvé, à compiler soi-même ; non distribuée |
 
 Restent avant la v1.0 : publier les variantes GPU et un binaire macOS
@@ -80,12 +79,10 @@ Sous Windows et Linux, le processeur doit disposer de l'**AVX2** : Intel Core
 depuis 2013, AMD depuis 2015. Certains Pentium, Celeron et Atom en sont
 dépourvus.
 
-> **v0.1.1 sous Linux : binaire défectueux.** Il exige par erreur l'AVX-512,
-> absent de la plupart des processeurs, et s'arrête alors sur « Illegal
+> **Évitez la v0.1.1 sous Linux.** Son binaire exige par erreur l'AVX-512,
+> absent de la plupart des processeurs, et s'arrête sur « Illegal
 > instruction » au chargement du modèle (risque R14 de la
-> [roadmap](docs/ROADMAP.md)). La prochaine version le corrige ; d'ici là,
-> compilez depuis les sources. Les binaires Windows et macOS ne sont pas
-> touchés.
+> [roadmap](docs/ROADMAP.md)). La v0.2.0 le corrige.
 
 La CLI invoque **yt-dlp** et **ffmpeg** sans les embarquer : installez-les
 séparément (commandes ci-dessous), placez `scripta` dans votre `PATH`, puis
@@ -163,8 +160,8 @@ de YouTube, HuggingFace et GitHub. Sa dernière ligne dénombre les problèmes.
 
 ### Application de bureau
 
-Tauri v2 et Svelte. À partir de la prochaine version, chaque release joint
-ses installeurs. Ils embarquent yt-dlp et une build minimale de ffmpeg : rien
+Tauri v2 et Svelte. Depuis la v0.2.0, chaque release joint ses
+installeurs. Ils embarquent yt-dlp et une build minimale de ffmpeg : rien
 d'autre à installer.
 
 | Système | Installeur | Taille |
