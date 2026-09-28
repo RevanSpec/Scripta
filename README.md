@@ -33,7 +33,7 @@ construit depuis les sources.
 | Sous-titres YouTube officiels | ✅ |
 | Cache de transcriptions | ✅ |
 | Mise à jour de l'extracteur | ✅ |
-| Binaires précompilés (CLI) | ✅ v0.1.1 |
+| Binaires précompilés (CLI) | ✅ v0.1.1 — ⚠ Linux : exige par erreur l'AVX-512, corrigé à la prochaine version |
 | Application de bureau | ✅ Windows · Linux : démarre, transcription à éprouver · macOS : jamais lancée |
 | Installeurs de l'application | 🚧 prêts, non signés — à la prochaine version |
 | Accélération GPU | ⏳ Vulkan éprouvé, à compiler soi-même ; non distribuée |
@@ -75,6 +75,17 @@ contrôle (`SHA256SUMS`) :
 | Windows 10 ou ultérieur, x86-64 | `scripta-<version>-x86_64-pc-windows-msvc.zip` |
 | Linux x86-64, glibc 2.34 ou ultérieure (Ubuntu 22.04, Debian 12, RHEL 9) | `scripta-<version>-x86_64-unknown-linux-gnu.tar.gz` |
 | macOS 11 ou ultérieur, Apple Silicon | `scripta-<version>-aarch64-apple-darwin.tar.gz` |
+
+Sous Windows et Linux, le processeur doit disposer de l'**AVX2** : Intel Core
+depuis 2013, AMD depuis 2015. Certains Pentium, Celeron et Atom en sont
+dépourvus.
+
+> **v0.1.1 sous Linux : binaire défectueux.** Il exige par erreur l'AVX-512,
+> absent de la plupart des processeurs, et s'arrête alors sur « Illegal
+> instruction » au chargement du modèle (risque R14 de la
+> [roadmap](docs/ROADMAP.md)). La prochaine version le corrige ; d'ici là,
+> compilez depuis les sources. Les binaires Windows et macOS ne sont pas
+> touchés.
 
 La CLI invoque **yt-dlp** et **ffmpeg** sans les embarquer : installez-les
 séparément (commandes ci-dessous), placez `scripta` dans votre `PATH`, puis
