@@ -32,6 +32,11 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # R14 : la build passe d'une machine de GitHub à l'autre par le cache, et
+  # ces machines n'ont pas toutes le même processeur. Compilé pour l'une qui
+  # a l'AVX-512, whisper.cpp est mort sur « Illegal instruction » sur une
+  # autre qui ne l'a pas. D'où la base AVX2, comme pour les binaires publiés.
+  GGML_NATIVE: "OFF"
   # « Me at the zoo », 19 s : la première vidéo de YouTube, stable depuis 2005.
   VIDEO: https://www.youtube.com/watch?v=jNQXAC9IVRw
 
@@ -52,8 +57,12 @@ jobs:
       - name: Toolchain
         run: rustup show
 
-      # La build d'un jour à l'autre ne change que si main change.
+      # La build d'un jour à l'autre ne change que si main change. La clé
+      # écarte les caches antérieurs à GGML_NATIVE=OFF : whisper-rs-sys ne
+      # se recompile pas quand la variable change.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ggml-sans-natif
 
       - name: Compilation
         run: cargo build --release --locked -p scripta-cli
