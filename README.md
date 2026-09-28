@@ -17,8 +17,9 @@ much all it is to say
 ## État du projet
 
 **La CLI est publiée** — v0.1.1, pour Windows, Linux et macOS Apple Silicon.
-L'application de bureau fonctionne ; elle se lance depuis les sources, en
-attendant d'être empaquetée.
+**L'application de bureau est empaquetée** : ses installeurs, qui embarquent
+yt-dlp et ffmpeg, seront joints à la prochaine version. D'ici là, elle se
+construit depuis les sources.
 
 | | État |
 |---|---|
@@ -29,14 +30,18 @@ attendant d'être empaquetée.
 | Horodatage au mot | ✅ |
 | Interruption propre (`Ctrl-C`) | ✅ |
 | Téléchargement des modèles, vérifié SHA-256 | ✅ |
-| Accélération GPU | ⏳ compilable, non distribuée |
 | Sous-titres YouTube officiels | ✅ |
 | Cache de transcriptions | ✅ |
 | Mise à jour de l'extracteur | ✅ |
-| Application de bureau | 🚧 installeurs non signés, dès la prochaine release |
 | Binaires précompilés (CLI) | ✅ v0.1.1 |
+| Application de bureau | ✅ Windows · Linux : démarre, transcription à éprouver · macOS : jamais lancée |
+| Installeurs de l'application | 🚧 prêts, non signés — à la prochaine version |
+| Accélération GPU | ⏳ Vulkan éprouvé, à compiler soi-même ; non distribuée |
 
-Suivi détaillé dans [`docs/ROADMAP.md`](docs/ROADMAP.md).
+Restent avant la v1.0 : publier les variantes GPU et un binaire macOS
+universel, surveiller chaque jour l'extraction face à YouTube, et lancer
+l'application sous macOS. Suivi détaillé dans
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ---
 
@@ -71,7 +76,7 @@ contrôle (`SHA256SUMS`) :
 | Linux x86-64, glibc 2.34 ou ultérieure (Ubuntu 22.04, Debian 12, RHEL 9) | `scripta-<version>-x86_64-unknown-linux-gnu.tar.gz` |
 | macOS 11 ou ultérieur, Apple Silicon | `scripta-<version>-aarch64-apple-darwin.tar.gz` |
 
-Scripta invoque **yt-dlp** et **ffmpeg** sans les embarquer : installez-les
+La CLI invoque **yt-dlp** et **ffmpeg** sans les embarquer : installez-les
 séparément (commandes ci-dessous), placez `scripta` dans votre `PATH`, puis
 vérifiez avec `scripta doctor`.
 
@@ -79,14 +84,8 @@ vérifiez avec `scripta doctor`.
 > il est bloqué par Gatekeeper ; retirez l'attribut de quarantaine avec
 > `xattr -d com.apple.quarantine scripta`.
 
-> **Sous Linux, en environnement dépouillé.** L'AppImage embarque son moteur de
-> rendu, mais pas les bibliothèques graphiques : celles-ci doivent venir du
-> système. Une session de bureau les fournit ; un conteneur, un serveur sans
-> écran ou un WSL minimal, non — la fenêtre s'ouvre alors vide. Il y manque en
-> général `libGLESv2`, que `sudo apt install libgles2` installe.
-
 Les binaires sont compilés pour le CPU. Pour un GPU, compilez depuis les
-sources.
+sources ([Accélération matérielle](#accélération-matérielle)).
 
 ### Prérequis
 
@@ -99,7 +98,7 @@ l'exécuter ([SPEC Annexe E](docs/SPEC.md#annexe-e--prérequis-de-compilation)).
 | **CMake** ≥ 3.20 | build natif de whisper.cpp |
 | **libclang** (LLVM) | génération des liaisons FFI |
 | Toolchain C++ | MSVC 2022 · GCC/Clang · Xcode CLT |
-| **yt-dlp**, **ffmpeg** | extraction audio, à l'exécution cette fois — requis aussi avec les binaires |
+| **yt-dlp**, **ffmpeg** | extraction audio, à l'exécution cette fois — requis aussi avec les binaires de la CLI ; les installeurs de l'application les embarquent |
 
 ```powershell
 # Windows
@@ -153,15 +152,31 @@ de YouTube, HuggingFace et GitHub. Sa dernière ligne dénombre les problèmes.
 
 ### Application de bureau
 
-Tauri v2 et Svelte. Les releases à venir joignent ses installeurs — NSIS sous
-Windows, AppImage et `.deb` sous Linux, `.dmg` sous macOS. Ils embarquent
-yt-dlp et une build minimale de ffmpeg : rien d'autre à installer.
+Tauri v2 et Svelte. À partir de la prochaine version, chaque release joint
+ses installeurs. Ils embarquent yt-dlp et une build minimale de ffmpeg : rien
+d'autre à installer.
+
+| Système | Installeur | Taille |
+|---|---|---|
+| Windows 10 ou ultérieur, x86-64 | NSIS — installation par utilisateur, sans droits d'administrateur | 22 Mo |
+| Linux x86-64 | AppImage | 125 Mo |
+| Linux x86-64, Debian et dérivées | `.deb`, qui dépend de `libwebkit2gtk-4.1-0` | 47 Mo |
+| macOS 11 ou ultérieur, Apple Silicon | `.dmg` | 43 Mo |
+
+yt-dlp fait l'essentiel de ces tailles : son exécutable autonome embarque
+Python. L'AppImage embarque en outre WebKitGTK.
 
 > **Installeurs non signés**, et ils ne le seront pas. Au premier lancement,
 > Windows affiche l'écran SmartScreen « Windows a protégé votre ordinateur » :
 > *Informations complémentaires*, puis *Exécuter quand même*. Sous macOS,
 > retirez l'attribut de quarantaine après installation :
 > `xattr -dr com.apple.quarantine /Applications/Scripta.app`.
+
+> **Sous Linux, en environnement dépouillé.** L'AppImage embarque son moteur de
+> rendu, mais pas les bibliothèques graphiques : celles-ci doivent venir du
+> système. Une session de bureau les fournit ; un conteneur, un serveur sans
+> écran ou un WSL minimal, non — la fenêtre s'ouvre alors vide. Il y manque en
+> général `libGLESv2`, que `sudo apt install libgles2` installe.
 
 Depuis les sources, il faut en plus des prérequis ci-dessus **Node.js** 20 ou
 ultérieur et la CLI de Tauri.
@@ -185,8 +200,8 @@ sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev l
 >
 > Cette build ne cherche jamais yt-dlp ni ffmpeg dans le `PATH`
 > ([SPEC §5.1](docs/SPEC.md#51-sécurité)) : placez-les à côté de l'exécutable.
-> Le bouton « Mettre à jour yt-dlp » installe ce dernier dans le répertoire de
-> Scripta, où il est aussi trouvé.
+> Le bouton « Mettre à jour » de yt-dlp, dans l'onglet « Modèles et outils »,
+> installe ce dernier dans le répertoire de Scripta, où il est aussi trouvé.
 
 `cargo build`, sans `-p`, ne construit que le cœur et la CLI : l'application
 exige WebKitGTK sous Linux et se construit par `cargo tauri`, qui embarque son
@@ -205,6 +220,15 @@ cargo about generate --locked --manifest-path crates/desktop/Cargo.toml -c about
 cd crates/desktop && cargo tauri build --config tauri.bundle.conf.json
 ```
 
+Sous Linux, l'AppImage doit ensuite passer par un correctif, depuis la racine
+du dépôt — `squashfs-tools` requis. Sans lui, elle s'ouvre sur une fenêtre
+vide dès que l'hôte est plus récent que la machine de build (risque R13 de la
+[roadmap](docs/ROADMAP.md)) :
+
+```bash
+sh scripts/empaquetage/appimage-sans-wayland-client.sh target/release/bundle/appimage
+```
+
 ### Accélération matérielle
 
 Les backends sont liés **à la compilation** : un artefact ne peut pas découvrir
@@ -218,7 +242,9 @@ cargo build --release -p scripta-cli --features cuda     # NVIDIA uniquement
 ```
 
 Sans feature, la build est CPU et démarre partout. `scripta doctor` indique le
-backend compilé.
+backend compilé. L'application de bureau relaie les mêmes features
+(`cargo tauri build --features vulkan`, depuis `crates/desktop`), mais n'a
+encore jamais été construite ainsi.
 
 La variante Vulkan réclame le **SDK Vulkan** pour compiler — `glslc` pour les
 shaders de ggml, `vulkan-1.lib` pour l'édition de liens
@@ -238,14 +264,15 @@ l'exécution, le `vulkan-1.dll` posé par le pilote graphique suffit.
 
 **Mesuré** le 2026-09-25 sur une RTX 3070, vidéo de 61 min, modèle `base` :
 **42,2 × temps réel en Vulkan contre 12,1 × en CPU**, avec 69 Mo de mémoire
-vive en moins — les poids vivent sur la carte. Le binaire Vulkan pèse en
-revanche **60,7 Mo contre 4,9**, les shaders de ggml y ajoutant 56 Mo. Détail
-et réserves dans [VERIFICATION](docs/VERIFICATION.md).
+vive en moins — les poids vivent sur la carte. La machine était toutefois
+chargée au départ, ce qui pénalise surtout le CPU : le gain réel se situe
+entre 2,7 et 3,5 ×. Le binaire Vulkan pèse en revanche **60,7 Mo contre 4,9**,
+les shaders de ggml y ajoutant 56 Mo. Détail dans
+[VERIFICATION](docs/VERIFICATION.md).
 
 > **CUDA et Metal restent non éprouvés**, et la CI ne construit que la variante
 > CPU. Deux backends compilés ne rendent pas le même texte au bit près : 88 %
 > de concordance lexicale entre CPU et Vulkan sur la vidéo de référence.
-
 
 ---
 
@@ -260,7 +287,20 @@ scripta "https://www.youtube.com/watch?v=<ID>"
 ```
 
 `--model auto`, le défaut, choisit `turbo` si un backend GPU est compilé et
-`base` sinon. La gestion du cache passe par `scripta models` :
+`base` sinon.
+
+| Modèle | Taille | Remarque |
+|---|---|---|
+| `tiny` | 74 Mo | très rapide, qualité limitée |
+| `base` | 141 Mo | bon point de départ sur CPU |
+| `small` | 181 Mo | compromis recommandé |
+| `medium` | 514 Mo | plus précis, plus lent |
+| `large-v3` | 1 031 Mo | qualité maximale ; recommandé pour traduire |
+| `turbo` | 547 Mo | rapide et précis, **ne sait pas traduire** |
+
+Au-delà de `base`, ce sont des variantes quantifiées : à qualité comparable,
+deux à trois fois plus légères. La gestion du cache passe par
+`scripta models` :
 
 ```bash
 scripta models list          # catalogue et état local
@@ -301,20 +341,13 @@ scripta update-extractor
 Le binaire est téléchargé depuis les *releases* de yt-dlp, vérifié par
 SHA-256, et installé dans un **répertoire utilisateur** — jamais dans le
 bundle applicatif, dont l'emplacement n'est pas inscriptible sans élévation
-(ADR-004). `scripta doctor` indique la
-provenance du binaire retenu : `mis à jour`, `embarqué` ou `système`.
+(ADR-004). `scripta doctor` indique la provenance du binaire retenu :
+`mis à jour`, `embarqué` ou `système`. Dans l'application, le bouton
+« Mettre à jour » de l'onglet « Modèles et outils » fait de même.
 
 Scripta vérifie **au plus une fois par jour** qu'une version plus récente
 existe, en arrière-plan et sans jamais retarder une commande, et le signale en
 fin d'exécution. `SCRIPTA_NO_UPDATE_CHECK=1` désactive cette vérification.
-
-| Modèle | Taille | Remarque |
-|---|---|---|
-| `tiny` | 75 Mo | très rapide, qualité limitée |
-| `base` | 142 Mo | bon point de départ sur CPU |
-| `small` | 190 Mo | compromis recommandé |
-| `large-v3` | 1,1 Go | qualité maximale ; recommandé pour traduire |
-| `large-v3-turbo` | 570 Mo | rapide et précis, **ne sait pas traduire** |
 
 ---
 
@@ -449,8 +482,10 @@ identifiant ne quitte la machine. Les seules destinations réseau sont
 jour de `yt-dlp`). La vérification quotidienne de mise à jour se résume à une
 requête `HEAD` vers `github.com` ; `SCRIPTA_NO_UPDATE_CHECK=1` la supprime.
 
-Certaines vidéos exigent une session authentifiée. `--cookies-from-browser` le
-permettra, **désactivé par défaut** et jamais activé automatiquement
+Certaines vidéos exigent une session authentifiée. `--cookies-from-browser`
+le permet — dans l'application, « Cookies du navigateur », parmi les options
+avancées. **Désactivé par défaut** et jamais activé automatiquement, il ne lit
+les cookies que pour youtube.com, sans jamais les écrire ni les journaliser
 ([SF-09](docs/SPEC.md#sf-09--authentification-et-confidentialité)).
 
 ---
@@ -497,7 +532,9 @@ identifiant validé, jamais recopiée telle quelle
 |---|---|
 | [`docs/SPEC.md`](docs/SPEC.md) | cahier des charges, décisions d'architecture |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | jalons, risques, traçabilité |
-| [`docs/VERIFICATION.md`](docs/VERIFICATION.md) | procédure d'acceptation manuelle |
+| [`docs/VERIFICATION.md`](docs/VERIFICATION.md) | procédure d'acceptation manuelle, mesures |
+| [`docs/releases/`](docs/releases) | notes de chaque version |
+| [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) | licences des composants tiers |
 
 ---
 
@@ -506,12 +543,16 @@ identifiant validé, jamais recopiée telle quelle
 [GPLv3](LICENSE).
 
 Dépendances : [yt-dlp](https://github.com/yt-dlp/yt-dlp) (The Unlicense),
-[whisper.cpp](https://github.com/ggml-org/whisper.cpp) et
-[whisper-rs](https://github.com/tazz4843/whisper-rs) (MIT),
-[FFmpeg](https://ffmpeg.org) (LGPL ou GPL selon la build) — toutes compatibles.
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT),
+[whisper-rs](https://codeberg.org/tazz4843/whisper-rs) (The Unlicense),
+[FFmpeg](https://ffmpeg.org) (LGPL 2.1 ou ultérieure, pour la build minimale
+qu'embarque l'application) — toutes compatibles.
 
-Scripta invoque `yt-dlp` et `ffmpeg` comme programmes externes sans les
-redistribuer. Les bibliothèques compilées dans le binaire, elles, le sont :
-chaque archive joint leurs licences (`LICENCES-DEPENDANCES.md`) et
+La CLI invoque `yt-dlp` et `ffmpeg` comme programmes externes, sans les
+redistribuer. Les installeurs de l'application, eux, les embarquent : chacun
+joint leurs licences et la fiche de construction de FFmpeg, dont l'archive
+source accompagne la release, comme l'exige la LGPL. Les bibliothèques
+compilées dans les binaires sont redistribuées elles aussi : archives et
+installeurs joignent leur inventaire (`LICENCES-DEPENDANCES.md`) et
 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)
 ([SPEC §1.3](docs/SPEC.md#13-licence-et-conformité)).
