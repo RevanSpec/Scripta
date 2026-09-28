@@ -35,11 +35,11 @@ embarquent yt-dlp et ffmpeg.
 | Binaires précompilés (CLI) | ✅ v0.2.0 |
 | Application de bureau | ✅ Windows et Linux · macOS : jamais lancée |
 | Installeurs de l'application | ✅ v0.2.0, non signés |
-| Accélération GPU | ⏳ Vulkan éprouvé, à compiler soi-même ; non distribuée |
+| Accélération GPU | 🚧 variantes Vulkan prêtes, à la version qui suit la v0.2.0 |
 
-Restent avant la v1.0 : publier les variantes GPU et un binaire macOS
-universel, surveiller chaque jour l'extraction face à YouTube, et lancer
-l'application sous macOS. Suivi détaillé dans
+Restent avant la v1.0 : publier les variantes Vulkan, planifier la veille
+de l'extraction depuis un poste — YouTube refuse les machines de GitHub —,
+et lancer l'application sous macOS. Suivi détaillé dans
 [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ---
@@ -92,8 +92,9 @@ vérifiez avec `scripta doctor`.
 > il est bloqué par Gatekeeper ; retirez l'attribut de quarantaine avec
 > `xattr -d com.apple.quarantine scripta`.
 
-Les binaires sont compilés pour le CPU. Pour un GPU, compilez depuis les
-sources ([Accélération matérielle](#accélération-matérielle)).
+Les binaires de la v0.2.0 sont compilés pour le CPU. Les versions
+suivantes joignent en outre, sous Windows et Linux, une variante Vulkan pour
+les cartes graphiques ([Accélération matérielle](#accélération-matérielle)).
 
 ### Prérequis
 
@@ -250,9 +251,21 @@ cargo build --release -p scripta-cli --features cuda     # NVIDIA uniquement
 ```
 
 Sans feature, la build est CPU et démarre partout. `scripta doctor` indique le
-backend compilé. L'application de bureau relaie les mêmes features
-(`cargo tauri build --features vulkan`, depuis `crates/desktop`), mais n'a
-encore jamais été construite ainsi.
+backend compilé et, pour une build GPU, la carte retenue. L'application de
+bureau se construit de même : `cargo tauri build --features vulkan`, depuis
+`crates/desktop`.
+
+**Variantes Vulkan précompilées.** À partir de la version qui suit la v0.2.0,
+chaque release joint, sous Windows et Linux, la variante Vulkan de la CLI
+(`scripta-vulkan-<version>-<triplet>`) et de l'application
+(`Scripta-Vulkan_…`). Elles couvrent NVIDIA, AMD et Intel, mais exigent un
+pilote graphique qui fournit Vulkan — `libvulkan1` sous Linux. Sans lui,
+prenez la variante CPU, qui démarre partout. Les deux variantes de
+l'application partagent un même identifiant : l'une remplace l'autre à
+l'installation.
+
+Sur un portable hybride, qui a une puce graphique intégrée et une carte
+dédiée, Scripta retient **la carte dédiée** : `scripta doctor` la nomme.
 
 La variante Vulkan réclame le **SDK Vulkan** pour compiler — `glslc` pour les
 shaders de ggml, `vulkan-1.lib` pour l'édition de liens
@@ -270,17 +283,21 @@ l'exécution, le `vulkan-1.dll` posé par le pilote graphique suffit.
 > cargo build --release -p scripta-cli --features vulkan --target-dir C:\sv
 > ```
 
-**Mesuré** le 2026-09-25 sur une RTX 3070, vidéo de 61 min, modèle `base` :
-**42,2 × temps réel en Vulkan contre 12,1 × en CPU**, avec 69 Mo de mémoire
-vive en moins — les poids vivent sur la carte. La machine était toutefois
-chargée au départ, ce qui pénalise surtout le CPU : le gain réel se situe
-entre 2,7 et 3,5 ×. Le binaire Vulkan pèse en revanche **60,7 Mo contre 4,9**,
-les shaders de ggml y ajoutant 56 Mo. Détail dans
+**Mesuré** sur la vidéo de référence de 61 min :
+
+| Machine | CPU | Vulkan, `base` | Vulkan, `turbo` |
+|---|---|---|---|
+| Portable, RTX A1000 6 Go, au repos (2026-09-28) | 13,4 × | **55,8 ×** | **25,1 ×** |
+| Poste à RTX 3070, chargé à 36 % (2026-09-25) | 12,1 × | 42,2 × | — |
+
+Les poids vivent sur la carte : moins de mémoire vive qu'en CPU, 657 Mo contre
+863 avec `base`. Le binaire Vulkan pèse en revanche **61 Mo contre 5**, les
+shaders de ggml y ajoutant 56 Mo. Détail dans
 [VERIFICATION](docs/VERIFICATION.md).
 
-> **CUDA et Metal restent non éprouvés**, et la CI ne construit que la variante
-> CPU. Deux backends compilés ne rendent pas le même texte au bit près : 88 %
-> de concordance lexicale entre CPU et Vulkan sur la vidéo de référence.
+> **CUDA et Metal restent non éprouvés.** Deux backends compilés ne rendent
+> pas le même texte au bit près : 88 % de concordance lexicale entre CPU et
+> Vulkan sur la vidéo de référence.
 
 ---
 

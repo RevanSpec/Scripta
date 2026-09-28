@@ -1,7 +1,7 @@
 # Scripta — Roadmap d'intégration
 
-**Version :** 1.5
-**Référence :** [SPEC.md](SPEC.md) v2.5
+**Version :** 1.6
+**Référence :** [SPEC.md](SPEC.md) v2.6
 
 ---
 
@@ -281,7 +281,7 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 - [ ] `cargo tauri dev` fonctionne sur les trois plateformes. *(Windows : éprouvé, installeur compris. **Linux : éprouvé — l'AppImage démarre, les sidecars embarqués s'exécutent et l'interface s'affiche, après le correctif R13 et l'ajout de `libgles2` sur un hôte dépouillé ; voir [VERIFICATION](VERIFICATION.md).** Le 2026-09-28, sur un second poste, la transcription a d'abord révélé **R14** — l'application de la répétition générale mourait sur « Illegal instruction » —, puis, sur la build corrigée, la vidéo de référence a été transcrite de bout en bout dans l'application, à 15,8 × temps réel. macOS : le crate compile et ses tests passent en CI, mais l'application n'y a pas été lancée.)*
 - [x] **La fenêtre reste réactive du début à la fin** d'une transcription d'une heure : aucun gel, l'annulation reste cliquable en permanence. *(61 min, build optimisée : onglets, options et défilement répondent pendant l'extraction comme pendant l'inférence.)*
 - [x] L'annulation en cours d'inférence libère les ressources en moins de 2 s. *(Moins d'une demi-seconde, même en build de débogage. Sur la vidéo d'une heure, la mémoire retombe de 881 à 181 Mo dans la seconde ; seul le modèle reste chargé.)*
-- [x] L'accélération affichée correspond au matériel réel sur au moins deux configurations distinctes. *(Mesuré le 2026-09-25 sur la vidéo de référence : **CPU 12,1 ×**, **Vulkan sur RTX 3070 42,2 ×**, soit 3,5 × — et la vitesse annoncée par Scripta est bien celle de l'inférence mesurée. **Réserve :** la machine était à 36 % de charge au départ, ce qui pénalise le CPU ; rapportée au relevé du J3 sur machine au repos (15,8 ×), l'accélération serait de 2,7 ×. Voir [VERIFICATION](VERIFICATION.md).)*
+- [x] L'accélération affichée correspond au matériel réel sur au moins deux configurations distinctes. *(Mesuré le 2026-09-25 sur la vidéo de référence : **CPU 12,1 ×**, **Vulkan sur RTX 3070 42,2 ×**, soit 3,5 × — et la vitesse annoncée par Scripta est bien celle de l'inférence mesurée. **Réserve :** la machine était à 36 % de charge au départ, ce qui pénalise le CPU ; rapportée au relevé du J3 sur machine au repos (15,8 ×), l'accélération serait de 2,7 ×. Le 2026-09-28, troisième configuration, un portable hybride : la variante Vulkan retenait d'abord la puce intégrée, sans gain sur le CPU (R17) ; corrigée, elle retient la RTX A1000 — **55,8 ×** avec `base`, contre 13,4 × en CPU sur la même machine au repos. Voir [VERIFICATION](VERIFICATION.md).)*
 - [x] Aucune variante de `ScriptaError` ne produit un message technique brut dans l'interface. *(Correspondance exhaustive, qu'une variante nouvelle ne passe pas sans message ; un test vérifie chaque variante.)*
 
 ### Risques
@@ -323,12 +323,22 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 >   contrôlé à chaque build. **La v0.1.1 pour Linux porte le défaut** : sans
 >   AVX-512, elle meurt sur « Illegal instruction » au chargement du modèle.
 >   Aucun téléchargement au 2026-09-28.
+> - **4.3** Variantes Vulkan de la CLI et de l'application, sous Windows et
+>   Linux : `scripta-vulkan-<version>-<triplet>` et `Scripta-Vulkan_…`. SDK
+>   de LunarG épinglé par son empreinte, liaison au chargeur Vulkan contrôlée
+>   à chaque build, chargeur retiré de l'AppImage — il doit être celui du
+>   pilote. La carte dédiée prime sur la puce intégrée (R17).
+> - **4.7** Veille quotidienne de l'extraction (#18), en CI et en local.
+>   YouTube refuse les machines de GitHub : en CI, elle reste non concluante,
+>   sans fausse alerte. Depuis une connexion résidentielle, elle conclut —
+>   `scripts/veille-locale.ps1`, à planifier par l'utilisateur.
+> - **4.8** Banc de performance (#19), à chaque fusion sur main : débit
+>   d'inférence et démarrage de la CLI, comparés sur un même processeur.
 >
 > Restent :
 >
-> - le binaire universel de la CLI sous macOS (4.4) ;
-> - les variantes Vulkan (4.3) ;
-> - la tâche quotidienne (4.7) et le banc de performance en CI (4.8) ;
+> - le binaire universel de la CLI sous macOS (4.4), écarté pour l'instant :
+>   aucun Mac pour l'éprouver ;
 > - la glibc 2.31 visée par le §5.3 : la CLI exige la 2.34, relevée sur
 >   le binaire construit sous Ubuntu 22.04.
 >
@@ -357,11 +367,11 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 
 ### Critères de sortie
 
-- [ ] Un tag produit les artefacts de la matrice [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) révisée — CLI et GUI sur les trois OS, et leur variante Vulkan sous Windows et Linux —, publiés avec leurs sommes de contrôle.
+- [ ] Un tag produit les artefacts de la matrice [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle) révisée — CLI et GUI sur les trois OS, et leur variante Vulkan sous Windows et Linux —, publiés avec leurs sommes de contrôle. *(Le workflow les produit tous depuis la tâche 4.3 — répétition générale [36409787301](https://github.com/RevanSpec/Scripta/actions/runs/36409787301), verte. Reste le tag qui les publie.)*
 - [ ] Le `.dmg` s'installe et se lance sur un **Mac vierge** (Apple Silicon), ~~sans avertissement Gatekeeper~~ par la procédure du README : sans signature, Gatekeeper avertit.
 - [ ] `update-extractor` fonctionne sur l'application **installée** ~~et signée~~ des trois plateformes — c'est le test qui valide [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour), et il **ne peut pas** être fait en mode développement. *(**Windows : fait** le 2026-09-25 sur l'installeur NSIS — le binaire mis à jour atterrit dans `bin/` et l'interface le marque « mis à jour » ; voir [VERIFICATION](VERIFICATION.md). **Linux : fait** le 2026-09-28 sur l'AppImage de la v0.2.0, après correction de R15 — l'AppImage étant montée en lecture seule, la copie embarquée ne peut de toute façon pas changer. macOS : reste.)*
-- [ ] La CLI démarre sur une machine **sans GPU ni driver** (validation de [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle)).
-- [ ] La tâche quotidienne s'exécute et alerte correctement.
+- [x] La CLI démarre sur une machine **sans GPU ni driver** (validation de [ADR-001](SPEC.md#adr-001--stratégie-daccélération-matérielle)). *(La variante CPU, artefact par défaut, s'exécute à chaque build sur les machines de GitHub, qui n'ont pas de GPU : c'est le premier contrôle du workflow de release. La variante Vulkan exige, elle, un chargeur Vulkan — le pilote graphique sous Windows, `libvulkan1` sous Linux —, ce que les notes de version disent.)*
+- [ ] La tâche quotidienne s'exécute et alerte correctement. *(Elle s'exécute, en CI chaque jour et en local. L'alerte reste à éprouver après fusion, par `simuler_echec` ; et la veille en CI ne conclut pas tant que YouTube refuse les machines de GitHub.)*
 
 ### Risques
 
@@ -414,7 +424,7 @@ Aucune de ces tâches ne conditionne la v1.0.
 
 | # | Risque | Impact | Prob. | Jalon | Mitigation |
 |---|---|---|---|---|---|
-| R1 | Build `whisper-rs` + GPU sous Windows | Élevé | **Écartée** | J0 → J4 | Le build natif CPU passe sur les trois OS en CI. Le build **Vulkan** est tenu depuis le 2026-09-25 : il compile sous Windows et tourne sur une RTX 3070, à 42,2 × temps réel contre 12,1 × en CPU. Trois obstacles ont dû tomber, tous propres à Windows et tous consignés en [Annexe E](SPEC.md#annexe-e--prérequis-de-compilation) : le SDK Vulkan requis à la compilation seulement, MAX_PATH atteint par la sous-compilation de `vulkan-shaders-gen` — sous un message trompeur, « No CMAKE_C_COMPILER could be found » —, et `MSB8029` qui ferme le repli par `%TEMP%`. **Restent non éprouvés :** CUDA et Metal |
+| R1 | Build `whisper-rs` + GPU sous Windows | Élevé | **Écartée** | J0 → J4 | Le build natif CPU passe sur les trois OS en CI. Le build **Vulkan** est tenu depuis le 2026-09-25 : il compile sous Windows et tourne sur une RTX 3070, à 42,2 × temps réel contre 12,1 × en CPU. Depuis le 2026-09-28, la CI le construit elle-même, sous Windows et Linux (4.3), et il tourne sur une RTX A1000 à 55,8 × — 25,1 × avec `turbo`. Trois obstacles ont dû tomber, tous propres à Windows et tous consignés en [Annexe E](SPEC.md#annexe-e--prérequis-de-compilation) : le SDK Vulkan requis à la compilation seulement, MAX_PATH atteint par la sous-compilation de `vulkan-shaders-gen` — sous un message trompeur, « No CMAKE_C_COMPILER could be found » —, et `MSB8029` qui ferme le repli par `%TEMP%`. **Restent non éprouvés :** CUDA et Metal |
 | R2 | Notarisation macOS des sidecars | Élevé | **Sans objet** | J4 | Pas de signature (décision du 2026-09-24). Reste l'avertissement de Gatekeeper au premier lancement, que le README apprend à lever |
 | R3 | **YouTube casse les extracteurs** | Élevé | **Certaine** *(question de quand, pas de si)* | Continu | [SF-06](SPEC.md#sf-06--maintenance-du-sidecar-yt-dlp) + tâche quotidienne 4.7 + [ADR-004](SPEC.md#adr-004--emplacement-des-sidecars-mis-à-jour). **C'est la raison d'être de ces trois éléments** |
 | R4 | Vérification anti-robot bloquant les utilisateurs | Moyen | Élevée | J2 | Diagnostic explicite (code 12) + `--cookies-from-browser` documenté |
@@ -430,6 +440,7 @@ Aucune de ces tâches ne conditionne la v1.0.
 | R14 | **Binaires distribués compilés pour le processeur de la machine de CI** | Élevé | **Avérée — corrigée** | J4 | ggml se compile par défaut pour la machine de build (`GGML_NATIVE`), et les machines de GitHub Actions varient d'un job à l'autre. L'AVX-512 de l'une d'elles est entré dans la CLI Linux publiée de la v0.1.1 : **6 217 instructions**, et « Illegal instruction » dès le chargement du modèle sur un i7-13700H, qui n'en a pas. Même loterie pour l'application Windows d'une répétition générale (4 838), quand une autre en avait 26 — celles de `crc32fast`, choisies à l'exécution. Révélé le 2026-09-28 par la première transcription de l'application sous Linux. **Correctif :** `GGML_NATIVE=OFF` dans le workflow de release — whisper-rs-sys transmet à CMake les variables `GGML_*` —, d'où la base AVX2 d'ADR-001 ; et `scripts/empaquetage/jeu-instructions.sh` refuse tout binaire x86-64 qui porte de l'AVX-512 ou manque d'AVX2. Même leçon que R13 : **la machine de build exécute sans peine ce qui échouera ailleurs** |
 | R15 | **Sous Linux, la mise à jour de yt-dlp installait une archive Python** | Élevé | **Avérée — corrigée** | J4 | `update_ytdlp` visait l'asset `yt-dlp` — une archive zip qu'exécute un interpréteur du système —, alors que l'application embarque `yt-dlp_linux`, l'exécutable autonome. Dans l'AppImage, l'archive ne s'exécute pas : « introuvable ». Et la copie utilisateur passant avant la copie embarquée (ADR-004), **« Mettre à jour » rendait l'extraction impossible** — le geste même censé la rétablir. Révélé le 2026-09-28 sous WSL. **Correctif (#16) :** l'exécutable autonome de chaque plateforme, et toute mise à jour exécutée avant d'être installée ; une copie qui ne rend pas sa version est refusée, celle en place conservée |
 | R16 | **Téléchargements de modèles plafonnés à une minute** | Élevé | **Avérée — corrigée** | J4 | Le délai « d'inactivité » de 60 s passé à ureq bornait la réception du corps **entier** : `turbo` échouait sous 9 Mo/s, `large-v3` sous 17 Mo/s. La reprise sauvait les octets, pas l'utilisateur, qui voyait l'erreur à chaque minute. Révélé le 2026-09-28 en voulant mesurer `turbo`. **Correctif (#20) :** requêtes `Range` par tranches de 16 Mio, chacune bornée à 60 s — un débit plancher d'environ 280 Ko/s. Éprouvé sur HuggingFace : `small` en un seul essai de 95 s |
+| R17 | **La variante Vulkan retenait la puce graphique intégrée** | Élevé | **Avérée — corrigée** | J4 | Sur un portable hybride, ggml énumère d'abord la puce intégrée — Intel UHD en 0, RTX A1000 en 1 —, et whisper.cpp retient le premier GPU qu'il compte. La variante accélérée y tournait à 13,6 × le temps réel, **autant que le CPU** (13,4 ×). Relevé le 2026-09-28, sur les binaires de la CI. **Correctif :** `transcribe::preferred_gpu` retient le premier GPU **dédié**, à défaut le premier intégré, et `doctor` le nomme. Éprouvé : whisper.cpp reçoit `gpu_device = 1`, et la même vidéo passe à 55,8 × |
 
 ---
 

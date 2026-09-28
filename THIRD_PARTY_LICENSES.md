@@ -93,6 +93,12 @@ L'application de bureau ajoute Tauri et ses dépendances, sous les mêmes
 licences, plus la Boost Software License (BSL-1.0) du presse-papiers sous
 Windows, compatible GPLv3 elle aussi.
 
+**Variantes Vulkan.** Elles compilent en outre le backend Vulkan de ggml
+(MIT) et les en-têtes Vulkan de Khronos, `vulkan_core.h` et `vulkan.hpp`,
+sous Apache-2.0 **ou** MIT au choix, et compatibles avec la GPLv3 dans les deux
+cas. Le chargeur Vulkan, lui, n'est pas redistribué : il vient du pilote
+graphique, ou de `libvulkan1` sous Linux.
+
 `about.toml` fixe la liste des licences acceptées : une dépendance sous une
 autre licence fait échouer la génération, donc la release.
 

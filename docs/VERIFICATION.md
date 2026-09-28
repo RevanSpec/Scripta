@@ -477,6 +477,45 @@ qu'un test d'égalité stricte entre variantes ne devra jamais supposer.
 la variante CPU : les shaders de ggml ajoutent 56 Mo au binaire. À dire dans
 les notes de version, sous peine de surprendre au téléchargement.
 
+### Accélération matérielle — RTX A1000 sur un portable hybride, 2026-09-28
+
+Second poste : i7-13700H, **NVIDIA RTX A1000 6 Go Laptop GPU**, et la puce
+Intel UHD du processeur — un portable hybride, configuration courante.
+Binaires de la répétition générale des variantes Vulkan, tels que la CI les
+produit : la CLI CPU et la CLI Vulkan, bâties du même commit. Vidéo de
+référence, `-l fr`, VAD, `--no-cache`. Pas de SDK Vulkan sur ce poste : le
+chargeur du pilote suffit à l'exécution.
+
+| Passe | Carte | Charge au départ | Vitesse | Crête mémoire | Segments |
+|---|---|---|---|---|---|
+| Vulkan, `base` | Intel UHD — le choix par défaut | 14 % | 13,6 × | 1 132 Mo | 932 |
+| CPU, `base` | — (14 threads) | 17 % | 13,4 × | 863 Mo | 930 |
+| Vulkan, `base` | **RTX A1000** | 8 % | **55,8 ×** | 657 Mo | 999 |
+| Vulkan, `turbo` | **RTX A1000** | 13 % | **25,1 ×** | 967 Mo | 983 |
+
+**La variante Vulkan prenait la mauvaise carte** (risque R17 de la
+[roadmap](ROADMAP.md)). ggml voit les deux — 0 = Intel UHD, 1 = RTX A1000 —,
+et whisper.cpp retient le premier GPU qu'il compte : la puce intégrée, qui
+n'apporte rien sur le CPU. Les deux passes RTX ci-dessus désignent la carte
+par `GGML_VK_VISIBLE_DEVICES=1`. Correctif : Scripta désigne lui-même le
+premier GPU **dédié**. Éprouvé sur la CLI de la répétition suivante, sans
+variable : `doctor` affiche « GPU : NVIDIA RTX A1000 6GB Laptop GPU
+(dédié) », et whisper.cpp reçoit `gpu_device = 1` — « using Vulkan1
+backend ».
+
+**Le seuil GPU du §5.2 est tenu** : `turbo`, sur un GPU de 6 Go, doit
+atteindre 8 × ; il atteint 25,1 ×.
+
+**Une charge voisine pénalise aussi le GPU.** Une première passe `base` sur
+la RTX A1000, lancée par erreur pendant une transcription CPU — 74 % de
+charge au départ —, ne donnait que 22,1 ×, contre 55,8 × au calme. Le
+relevé de la RTX 3070, fait sous 36 % de charge, la sous-estime donc
+probablement.
+
+**Chargeur Vulkan.** L'AppImage Vulkan de la même répétition n'embarque plus
+`libvulkan.so.1` : elle démarre sous WSLg avec le chargeur du système, et
+son en-tête annonce « VULKAN », le modèle automatique passant à `turbo`.
+
 ---
 
 
