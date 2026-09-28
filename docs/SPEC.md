@@ -1,6 +1,6 @@
 # Scripta — Cahier des charges technique et fonctionnel
 
-**Version :** 2.4
+**Version :** 2.5
 **Statut :** Validé pour implémentation — ADR-001 révisé au Jalon 0, SF-04 précisé au Jalon 2
 **Révision précédente :** 1.0 (voir [Annexe C — Journal des corrections](#annexe-c--journal-des-corrections))
 
@@ -374,7 +374,7 @@ La même règle s'applique à la lecture de `stdout` : elle doit se faire dans u
 - **Référencement par révision épinglée**, jamais par `main` : une URL de branche n'est pas reproductible et invaliderait les empreintes.
 - Vérification d'intégrité **SHA-256** obligatoire contre une table embarquée dans le binaire. Un fichier dont l'empreinte diffère est supprimé et l'opération échoue (code 30).
 - Téléchargement vers un fichier temporaire `.part` dans le répertoire cible, puis renommage atomique — un `Ctrl-C` pendant le téléchargement ne laisse jamais un modèle tronqué qui serait ensuite considéré comme valide.
-- Timeouts explicites : 30 s à la connexion, 60 s d'inactivité. Reprise sur `Range` si le serveur la supporte.
+- Timeouts explicites : 30 s à la connexion ; puis un fichier demandé par tranches de 16 Mio, chacune reçue en 60 s au plus, soit un débit plancher d'environ 280 Ko/s. Reprise sur `Range` si le serveur la supporte. *(Corrigé le 2026-09-28 : les 60 s bornaient la réception du fichier **entier**, et tout modèle qu'il fallait plus d'une minute pour recevoir échouait — risque R16.)*
 - Barre de progression sur `stderr`.
 
 **Modèle VAD.** Le modèle Silero utilisé par [SF-04](#sf-04--moteur-de-transcription-locale) (`ggml-silero-v5.1.2.bin`, ≈ 2 Mo) suit le même cycle de vie et est téléchargé à la première utilisation.
@@ -526,6 +526,8 @@ YouTube modifie fréquemment ses mécanismes d'extraction : un `yt-dlp` embarqu�
 - Commande CLI `scripta update-extractor`, bouton équivalent en GUI.
 - **Conformément à [ADR-004](#adr-004--emplacement-des-sidecars-mis-à-jour), la mise à jour écrit exclusivement dans `<data_dir>/scripta/bin/` et ne touche jamais au bundle signé.** Le mécanisme interne `yt-dlp -U` n'est donc **pas** utilisé sur la copie embarquée ; la dernière version est téléchargée depuis les *releases* GitHub de yt-dlp, vérifiée, puis installée à l'emplacement inscriptible.
 - Vérification d'intégrité contre le fichier `SHA2-256SUMS` publié avec chaque release.
+- L'artefact téléchargé est l'**exécutable autonome** de la plateforme — `yt-dlp_linux` sous Linux, comme la copie embarquée —, jamais l'archive Python `yt-dlp`, qui exige un interpréteur sur le poste. *(Corrigé le 2026-09-28 — risque R15.)*
+- La copie téléchargée est **exécutée avant d'être installée** : si elle ne rend pas sa version, elle est supprimée et la copie en place conservée. Une mise à jour ne peut donc jamais masquer une copie qui fonctionne.
 - Sur macOS, le binaire téléchargé reçoit une signature ad-hoc (`codesign -s -`) et l'attribut de quarantaine est retiré, faute de quoi il ne s'exécutera pas sur Apple Silicon.
 - Vérification de disponibilité au démarrage, au plus une fois par période de 24 h, sans blocage et sans télémétrie. Désactivable par `SCRIPTA_NO_UPDATE_CHECK=1`.
 
@@ -811,6 +813,12 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 > runtime C lié statiquement. Une build en conteneur et `lipo` les résorberont au
 > [Jalon 4](ROADMAP.md#jalon-4--packaging-et-cicd).
 
+**Processeur (x86-64) :** AVX2 requis, avec FMA, F16C et BMI2 — Intel Core
+depuis Haswell (2013), AMD depuis Excavator (2015). Certains Pentium, Celeron
+et Atom en sont dépourvus. C'est la base de l'artefact CPU
+d'[ADR-001](#adr-001--stratégie-daccélération-matérielle) ; l'AVX-512 n'est
+jamais requis (voir §5.4).
+
 ### 5.4 Distribution et packaging
 
 | Plateforme | CLI | GUI |
@@ -822,6 +830,7 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 - Les sidecars `yt-dlp` et `ffmpeg` sont embarqués dans les bundles GUI. Pour la CLI, ils sont **recherchés sur le système puis téléchargés à la demande** dans `<data_dir>/scripta/bin/` — embarquer 70 Mo de FFmpeg dans un binaire CLI contredirait l'objectif de légèreté.
 - **Build FFmpeg minimal** : seuls les décodeurs (`opus`, `vorbis`, `aac`, `mp3`), démultiplexeurs (`matroska`, `mov`, `mp3`) et le rééchantillonneur sont nécessaires. Une build ciblée descend autour de 10–15 Mo, contre 60–70 Mo pour une build complète. *(Mesuré au J4 : FFmpeg 9.0.2 statique, sous LGPL, sans bibliothèque externe — **3,2 Mo** sous Linux, **1,9 Mo** sous Windows et macOS. S'y ajoutent les démultiplexeurs `ogg`, `aac` et `wav`, par prudence. Sur sa propre plateforme, chaque binaire décode cinq échantillons — Opus, Vorbis, AAC, MP3, MP4 avec image — par la commande même du cœur. Construction : `scripts/sidecars/build-ffmpeg.sh` ; Windows se compile depuis Linux par mingw-w64.)*
 - ~~Sur macOS, **tous** les binaires du bundle — application et sidecars — doivent être signés et notarisés ensemble, avec les droits d'exécution appropriés.~~ **Aucune signature** (décision du 2026-09-24) : ni Developer ID ni notarisation sous macOS, ni Authenticode sous Windows. Gatekeeper et SmartScreen avertissent au premier lancement ; le README donne la marche à suivre. Sur Apple Silicon, chaque binaire garde la signature *ad hoc* que lui appose l'éditeur de liens — sans elle, macOS refuserait de l'exécuter —, ce qui n'engage aucun compte ni certificat.
+- **Jeu d'instructions** *(risque R14, 2026-09-28)* : les binaires distribués sont compilés sans `GGML_NATIVE` — base x86-64 AVX2, et premier Apple Silicon sous macOS. Compilé pour la machine de build, un binaire hérite de ses extensions : l'AVX-512 d'une machine de GitHub est ainsi entré dans la CLI Linux de la v0.1.1, qui meurt sur « Illegal instruction » partout où il manque. Chaque binaire x86-64 est contrôlé à la build (`scripts/empaquetage/jeu-instructions.sh`) : ni AVX-512, ni moins que l'AVX2. Une build locale reste native — elle ne quitte pas sa machine.
 - Chaque release publie un fichier de sommes de contrôle et la liste des versions de sidecars embarquées. *(J4 : versions et empreintes dans `scripts/sidecars/versions.env`, qui refuse tout fichier ne portant pas la sienne ; fiche de construction de FFmpeg dans chaque installeur.)*
 - *(v0.1.x.)* Les archives de la CLI n'embarquent aucun sidecar. Elles joignent `LICENSE`, `THIRD_PARTY_LICENSES.md` et l'inventaire des licences des bibliothèques compilées (`LICENCES-DEPENDANCES.md`, généré par `cargo about` ; `about.toml` fixe les licences acceptées). Un tag produit un **brouillon** de release, publié à la main après relecture.
 
@@ -885,6 +894,8 @@ L'invariant « zero-disk » est vérifiable automatiquement : instrumenter le r�
 | 15 | Incompatibilité GPLv3 / App Store, avertissement CGU | [§1.3](#13-licence-et-conformité) |
 
 ## Annexe C — Journal des corrections
+
+**v2.5** — Jeu d'instructions des binaires distribués : base AVX2, compilation native écartée, contrôle à la build (§5.3, §5.4 — risque R14). Téléchargement des modèles par tranches (SF-03, R16). Mise à jour de yt-dlp : exécutable autonome, essayé avant d'être installé (SF-06, R15).
 
 **v2.4** — Jalon 4, premier lot : sidecars embarqués dans l'application de bureau, build FFmpeg minimale mesurée (§5.4, Annexe D), déclaration `externalBin` propre au bundle et noms préfixés (§4.2), obligations de licence mises en œuvre (§1.3) ; hypothèse sur les rappels de whisper-rs précisée (Annexe D) ; signature abandonnée (§1.3, §5.4, ADR-004 — décision du 2026-09-24).
 

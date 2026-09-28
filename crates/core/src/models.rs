@@ -20,8 +20,18 @@ use crate::error::{Result, ScriptaError};
 
 /// Délai d'établissement de la connexion.
 const CONNECT_TIMEOUT_S: u64 = 30;
-/// Délai d'inactivité au cours du transfert.
-const IDLE_TIMEOUT_S: u64 = 60;
+/// Délai de réception d'une tranche.
+///
+/// ureq borne la réception d'un corps **entier** (`timeout_recv_body`), pas
+/// un silence du serveur. Demandé d'une traite, un modèle échouait donc dès
+/// qu'il fallait plus d'une minute pour le recevoir : 547 Mo pour `turbo`,
+/// soit toute connexion sous 9 Mo/s. La reprise sauvait les octets, pas
+/// l'utilisateur, qui voyait l'erreur à chaque minute. D'où les tranches.
+const TRANCHE_TIMEOUT_S: u64 = 60;
+/// Taille d'une tranche : 16 Mio par minute, soit un débit plancher de
+/// 280 Ko/s environ, sous lequel une tranche échoue — et la suivante tentative
+/// reprend là où elle s'est arrêtée.
+const TRANCHE: u64 = 16 * 1024 * 1024;
 
 const HF: &str = "https://huggingface.co";
 
@@ -249,72 +259,121 @@ fn telecharger(
     progress: ProgressFn<'_>,
     cancel: Option<&CancelToken>,
 ) -> Result<()> {
-    // Reprise : un `.part` déjà présent provient d'un transfert interrompu.
-    // Sur un fichier d'un gigaoctet, tout reprendre serait coûteux.
-    let deja = fs::metadata(partiel).map(|m| m.len()).unwrap_or(0);
-    let reprise = deja > 0;
+    telecharger_par_tranches(url, partiel, TRANCHE, progress, cancel)
+}
 
+/// Télécharge `url` dans `partiel`, par requêtes `Range` successives.
+///
+/// Chaque tranche a son propre délai ([`TRANCHE_TIMEOUT_S`]). Un `.part` déjà
+/// présent provient d'un transfert interrompu : il est repris là où il s'est
+/// arrêté — sur un fichier d'un gigaoctet, tout reprendre serait coûteux. Un
+/// serveur qui ignore `Range` renvoie tout, qu'il faut prendre depuis zéro.
+fn telecharger_par_tranches(
+    url: &str,
+    partiel: &Path,
+    tranche: u64,
+    progress: ProgressFn<'_>,
+    cancel: Option<&CancelToken>,
+) -> Result<()> {
     let agent = ureq::Agent::config_builder()
         .timeout_connect(Some(std::time::Duration::from_secs(CONNECT_TIMEOUT_S)))
-        .timeout_recv_body(Some(std::time::Duration::from_secs(IDLE_TIMEOUT_S)))
+        .timeout_recv_body(Some(std::time::Duration::from_secs(TRANCHE_TIMEOUT_S)))
         .build()
         .new_agent();
-
-    let mut requete = agent.get(url);
-    if reprise {
-        requete = requete.header("Range", &format!("bytes={deja}-"));
-    }
-
-    let reponse = requete.call().map_err(|e| ScriptaError::ModelUnavailable {
-        detail: format!("téléchargement de {url} : {e}"),
-    })?;
-
-    // 206 confirme que le serveur honore la reprise ; 200 signifie qu'il
-    // renvoie tout, auquel cas il faut repartir de zéro.
-    let reprend = reponse.status().as_u16() == 206;
-    let mut deja = if reprend { deja } else { 0 };
-
-    let mut fichier = if reprend {
-        fs::OpenOptions::new()
-            .append(true)
-            .open(partiel)
-            .map_err(|e| io_err(partiel, e))?
-    } else {
-        File::create(partiel).map_err(|e| io_err(partiel, e))?
+    let echec = |detail: String| ScriptaError::ModelUnavailable {
+        detail: format!("téléchargement de {url} : {detail}"),
     };
 
-    let total = reponse
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok())
-        .map(|n| n + deja)
-        .unwrap_or(0);
-
-    let mut corps = reponse.into_body().into_reader();
+    let mut deja = fs::metadata(partiel).map(|m| m.len()).unwrap_or(0);
+    let mut fichier = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(partiel)
+        .map_err(|e| io_err(partiel, e))?;
+    let mut total: Option<u64> = None;
     let mut tampon = vec![0u8; 256 * 1024];
 
-    progress(deja, total);
-    loop {
-        if cancel::is_cancelled(cancel) {
-            // Le `.part` reste en place, complet jusqu'au dernier bloc écrit :
-            // la prochaine tentative le reprendra par une requête `Range`.
-            fichier.flush().map_err(|e| io_err(partiel, e))?;
-            return Err(ScriptaError::Interrupted);
+    while total.is_none_or(|t| deja < t) {
+        let reponse = match agent
+            .get(url)
+            .header("Range", &format!("bytes={deja}-{}", deja + tranche - 1))
+            .call()
+        {
+            Ok(r) => r,
+            // Rien au-delà de ce qui est déjà là : le `.part` est complet.
+            // L'empreinte, vérifiée ensuite, en jugera.
+            Err(ureq::Error::StatusCode(416)) => break,
+            Err(e) => return Err(echec(e.to_string())),
+        };
+
+        // 206 : le serveur honore la tranche. Sinon il renvoie tout.
+        let entier = reponse.status().as_u16() != 206;
+        if entier {
+            // Recréé plutôt que tronqué : sous Windows, un fichier ouvert en
+            // ajout refuse la troncature.
+            fichier = File::create(partiel).map_err(|e| io_err(partiel, e))?;
+            deja = 0;
+            total = en_tete(reponse.headers(), "content-length").and_then(|v| v.parse().ok());
+        } else {
+            let (debut, annonce) = en_tete(reponse.headers(), "content-range")
+                .and_then(plage)
+                .ok_or_else(|| echec("Content-Range illisible".to_string()))?;
+            if debut != deja {
+                return Err(echec(format!(
+                    "tranche décalée : {debut} au lieu de {deja}"
+                )));
+            }
+            total = annonce;
         }
-        let n = corps.read(&mut tampon).map_err(|e| io_err(partiel, e))?;
-        if n == 0 {
+
+        let avant = deja;
+        let mut corps = reponse.into_body().into_reader();
+        progress(deja, total.unwrap_or(0));
+        loop {
+            if cancel::is_cancelled(cancel) {
+                // Le `.part` reste en place, complet jusqu'au dernier bloc
+                // écrit : la prochaine tentative le reprendra.
+                fichier.flush().map_err(|e| io_err(partiel, e))?;
+                return Err(ScriptaError::Interrupted);
+            }
+            let n = corps.read(&mut tampon).map_err(|e| io_err(partiel, e))?;
+            if n == 0 {
+                break;
+            }
+            fichier
+                .write_all(&tampon[..n])
+                .map_err(|e| io_err(partiel, e))?;
+            deja += n as u64;
+            progress(deja, total.unwrap_or(0));
+        }
+
+        // Un corps entier est fini. Sans total annoncé, une tranche plus
+        // courte que demandé marque la fin ; une tranche vide aussi, faute de
+        // quoi la boucle ne s'arrêterait pas.
+        let recu = deja - avant;
+        if entier || recu == 0 || (total.is_none() && recu < tranche) {
             break;
         }
-        fichier
-            .write_all(&tampon[..n])
-            .map_err(|e| io_err(partiel, e))?;
-        deja += n as u64;
-        progress(deja, total);
     }
     fichier.flush().map_err(|e| io_err(partiel, e))?;
 
     Ok(())
+}
+
+fn en_tete<'a>(entetes: &'a ureq::http::HeaderMap, nom: &str) -> Option<&'a str> {
+    entetes.get(nom)?.to_str().ok()
+}
+
+/// `bytes 0-16777215/574041195` → début de la tranche et taille totale, si
+/// le serveur l'annonce.
+fn plage(valeur: &str) -> Option<(u64, Option<u64>)> {
+    let (unite, reste) = valeur.split_once(' ')?;
+    if unite != "bytes" {
+        return None;
+    }
+    let (intervalle, total) = reste.split_once('/')?;
+    let debut = intervalle.split_once('-')?.0.parse().ok()?;
+    Some((debut, total.parse().ok()))
 }
 
 fn io_err(chemin: &Path, e: std::io::Error) -> ScriptaError {
@@ -490,5 +549,152 @@ mod tests {
             hash_file(f.path()).unwrap(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn lit_la_plage_d_une_tranche() {
+        assert_eq!(
+            plage("bytes 0-16777215/574041195"),
+            Some((0, Some(574_041_195)))
+        );
+        // Taille totale inconnue du serveur.
+        assert_eq!(plage("bytes 5-9/*"), Some((5, None)));
+        assert_eq!(plage("octets 0-1/2"), None);
+        assert_eq!(plage("bytes */574041195"), None);
+    }
+
+    /// Serveur HTTP minimal : sert `donnees`, honore `Range` — sauf si
+    /// `ignore_range` —, et consigne les plages demandées.
+    fn serveur(
+        donnees: Vec<u8>,
+        ignore_range: bool,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader};
+
+        let ecoute = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/modele.bin", ecoute.local_addr().unwrap());
+        let plages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let journal = std::sync::Arc::clone(&plages);
+        std::thread::spawn(move || {
+            for flux in ecoute.incoming() {
+                let Ok(mut flux) = flux else { continue };
+                let mut lecteur = BufReader::new(flux.try_clone().unwrap());
+                let mut range = None;
+                loop {
+                    let mut ligne = String::new();
+                    if lecteur.read_line(&mut ligne).unwrap_or(0) == 0 || ligne == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = ligne.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        range = Some(v.trim().to_string());
+                    }
+                }
+                journal
+                    .lock()
+                    .unwrap()
+                    .push(range.clone().unwrap_or_default());
+                let total = donnees.len();
+                let (tete, corps): (String, &[u8]) = match range.filter(|_| !ignore_range) {
+                    None => (
+                        format!("HTTP/1.1 200 OK\r\nContent-Length: {total}\r\n"),
+                        &donnees,
+                    ),
+                    Some(r) => {
+                        let (a, b) = r.split_once('-').unwrap();
+                        let a: usize = a.parse().unwrap();
+                        if a >= total {
+                            (
+                                format!(
+                                    "HTTP/1.1 416 Range Not Satisfiable\r\n\
+                                     Content-Range: bytes */{total}\r\nContent-Length: 0\r\n"
+                                ),
+                                &[],
+                            )
+                        } else {
+                            let b = b.parse::<usize>().map_or(total - 1, |b| b.min(total - 1));
+                            (
+                                format!(
+                                    "HTTP/1.1 206 Partial Content\r\n\
+                                     Content-Range: bytes {a}-{b}/{total}\r\nContent-Length: {}\r\n",
+                                    b + 1 - a
+                                ),
+                                &donnees[a..=b],
+                            )
+                        }
+                    }
+                };
+                let _ = flux.write_all(format!("{tete}Connection: close\r\n\r\n").as_bytes());
+                let _ = flux.write_all(corps);
+            }
+        });
+        (url, plages)
+    }
+
+    fn donnees_de_test() -> Vec<u8> {
+        (0..10_000u32).map(|i| (i * 7 % 251) as u8).collect()
+    }
+
+    #[test]
+    fn telecharge_par_tranches() {
+        let donnees = donnees_de_test();
+        let (url, plages) = serveur(donnees.clone(), false);
+        let dir = tempfile::tempdir().unwrap();
+        let partiel = dir.path().join("modele.part");
+
+        let mut vus = Vec::new();
+        telecharger_par_tranches(&url, &partiel, 3_000, &mut |r, t| vus.push((r, t)), None)
+            .unwrap();
+
+        assert_eq!(fs::read(&partiel).unwrap(), donnees);
+        assert_eq!(
+            *plages.lock().unwrap(),
+            ["0-2999", "3000-5999", "6000-8999", "9000-11999"]
+        );
+        // La progression connaît le total dès la première tranche.
+        assert_eq!(vus.last(), Some(&(10_000, 10_000)));
+    }
+
+    #[test]
+    fn reprend_un_telechargement_interrompu() {
+        let donnees = donnees_de_test();
+        let (url, plages) = serveur(donnees.clone(), false);
+        let dir = tempfile::tempdir().unwrap();
+        let partiel = dir.path().join("modele.part");
+        fs::write(&partiel, &donnees[..4_000]).unwrap();
+
+        telecharger_par_tranches(&url, &partiel, 3_000, &mut |_, _| {}, None).unwrap();
+
+        assert_eq!(fs::read(&partiel).unwrap(), donnees);
+        assert_eq!(*plages.lock().unwrap(), ["4000-6999", "7000-9999"]);
+    }
+
+    #[test]
+    fn un_partiel_complet_ne_retelecharge_rien() {
+        let donnees = donnees_de_test();
+        let (url, plages) = serveur(donnees.clone(), false);
+        let dir = tempfile::tempdir().unwrap();
+        let partiel = dir.path().join("modele.part");
+        fs::write(&partiel, &donnees).unwrap();
+
+        telecharger_par_tranches(&url, &partiel, 3_000, &mut |_, _| {}, None).unwrap();
+
+        assert_eq!(fs::read(&partiel).unwrap(), donnees);
+        assert_eq!(*plages.lock().unwrap(), ["10000-12999"]);
+    }
+
+    #[test]
+    fn un_serveur_sans_range_renvoie_tout() {
+        let donnees = donnees_de_test();
+        let (url, plages) = serveur(donnees.clone(), true);
+        let dir = tempfile::tempdir().unwrap();
+        let partiel = dir.path().join("modele.part");
+        // Un partiel qui ne correspond à rien : il doit être écrasé, pas
+        // prolongé.
+        fs::write(&partiel, vec![0xAA; 4_000]).unwrap();
+
+        telecharger_par_tranches(&url, &partiel, 3_000, &mut |_, _| {}, None).unwrap();
+
+        assert_eq!(fs::read(&partiel).unwrap(), donnees);
+        assert_eq!(plages.lock().unwrap().len(), 1);
     }
 }
