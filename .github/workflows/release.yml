@@ -17,6 +17,7 @@ on:
       - "scripts/sidecars/**"
       - "scripts/empaquetage/**"
       - "crates/desktop/tauri.bundle.conf.json"
+      - "crates/desktop/tauri.vulkan.conf.json"
   workflow_dispatch:
 
 permissions:
@@ -35,7 +36,7 @@ env:
 
 jobs:
   build:
-    name: CLI ${{ matrix.target }}
+    name: CLI ${{ matrix.target }}${{ matrix.variante == 'vulkan' && ' · Vulkan' || '' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -43,13 +44,25 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            variante: cpu
           # 22.04 plutôt que latest : un binaire Linux exige au plus la glibc
           # de sa machine de build. Construit ici, il n'en demande que la 2.34
           # (relevée à chaque build), contre jusqu'à 2.39 sous la 24.04.
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            variante: cpu
           - os: macos-latest
             target: aarch64-apple-darwin
+            variante: cpu
+          # ADR-001 révisé : un artefact par backend. La variante Vulkan couvre
+          # NVIDIA, AMD et Intel sous Windows et Linux ; celle par défaut, CPU,
+          # démarre partout, pilote graphique ou non.
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            variante: vulkan
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            variante: vulkan
     steps:
       - uses: actions/checkout@v4
 
@@ -93,10 +106,23 @@ jobs:
       - name: Toolchain
         run: rustup show
 
+      # ADR-001 révisé, tâche 4.3 : la variante Vulkan se compile avec le SDK,
+      # épinglé et vérifié comme les sidecars (scripts/empaquetage/vulkan.env).
+      - name: SDK Vulkan
+        if: matrix.variante == 'vulkan'
+        shell: bash
+        run: sh scripts/empaquetage/sdk-vulkan.sh ${{ matrix.target }} "$RUNNER_TEMP/vulkan"
+
+      # Le démarrage de la variante Vulkan, que le contrôle ci-dessous exige,
+      # veut un chargeur Vulkan : sans GPU, celui du paquet suffit.
+      - name: Chargeur Vulkan (Linux)
+        if: matrix.variante == 'vulkan' && runner.os == 'Linux'
+        run: sudo apt-get install -y libvulkan1
+
       # Pas de cache : un artefact publié se construit depuis zéro, sans rien
       # hériter d'une build précédente.
       - name: Compilation
-        run: cargo build --release --locked -p scripta-cli
+        run: cargo build --release --locked -p scripta-cli ${{ matrix.variante == 'vulkan' && '--features vulkan' || '' }}
 
       - name: Contrôles du binaire
         id: binaire
@@ -133,6 +159,9 @@ jobs:
           case "${{ matrix.target }}" in
             x86_64-*) sh scripts/empaquetage/jeu-instructions.sh "$exe" ;;
           esac
+          if [ "${{ matrix.variante }}" = vulkan ]; then
+            sh scripts/empaquetage/liaison-vulkan.sh "$exe"
+          fi
 
       - name: Outil d'inventaire des licences
         uses: taiki-e/install-action@v2
@@ -153,7 +182,9 @@ jobs:
       - name: Empaquetage
         shell: bash
         run: |
-          nom="scripta-${{ steps.binaire.outputs.version }}-${{ matrix.target }}"
+          prefixe=scripta
+          [ "${{ matrix.variante }}" = vulkan ] && prefixe=scripta-vulkan
+          nom="$prefixe-${{ steps.binaire.outputs.version }}-${{ matrix.target }}"
           mkdir -p "dist/$nom"
           cp "${{ steps.binaire.outputs.exe }}" README.md LICENSE THIRD_PARTY_LICENSES.md LICENCES-DEPENDANCES.md "dist/$nom/"
           cd dist
@@ -167,7 +198,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: scripta-${{ matrix.target }}
+          name: ${{ matrix.variante == 'vulkan' && 'scripta-vulkan' || 'scripta' }}-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
@@ -239,7 +270,7 @@ jobs:
           if-no-files-found: error
 
   bureau:
-    name: Bureau ${{ matrix.target }}
+    name: Bureau ${{ matrix.target }}${{ matrix.variante == 'vulkan' && ' · Vulkan' || '' }}
     needs: [echantillons, sidecars]
     runs-on: ${{ matrix.os }}
     strategy:
@@ -249,12 +280,23 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis
+            variante: cpu
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             bundles: appimage,deb
+            variante: cpu
           - os: macos-latest
             target: aarch64-apple-darwin
             bundles: dmg
+            variante: cpu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+            variante: vulkan
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+            variante: vulkan
     steps:
       - uses: actions/checkout@v4
 
@@ -267,6 +309,11 @@ jobs:
           sudo apt-get install -y cmake libclang-dev \
             libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev \
             libfuse2 file squashfs-tools
+          # linuxdeploy résout les dépendances du binaire : celle de la
+          # variante Vulkan comprise.
+          if [ "${{ matrix.variante }}" = vulkan ]; then
+            sudo apt-get install -y libvulkan1
+          fi
 
       # Risque R9, comme pour la CLI. Runtime C dynamique ici : l'installeur
       # s'appuie de toute façon sur WebView2, et Tauri n'est pas éprouvé en
@@ -293,6 +340,13 @@ jobs:
 
       - name: Toolchain
         run: rustup show
+
+      # ADR-001 révisé, tâche 4.3 : la variante Vulkan se compile avec le SDK,
+      # épinglé et vérifié comme les sidecars (scripts/empaquetage/vulkan.env).
+      - name: SDK Vulkan
+        if: matrix.variante == 'vulkan'
+        shell: bash
+        run: sh scripts/empaquetage/sdk-vulkan.sh ${{ matrix.target }} "$RUNNER_TEMP/vulkan"
 
       - uses: actions/setup-node@v4
         with:
@@ -343,7 +397,11 @@ jobs:
       - name: Empaquetage
         shell: pwsh
         working-directory: crates/desktop
-        run: node ui/node_modules/@tauri-apps/cli/tauri.js build --ci --config tauri.bundle.conf.json --bundles ${{ matrix.bundles }}
+        # Variante Vulkan : la feature, et la dépendance du .deb au chargeur.
+        run: |
+          $vulkan = @()
+          if ("${{ matrix.variante }}" -eq "vulkan") { $vulkan = @("--config", "tauri.vulkan.conf.json", "--features", "vulkan") }
+          node ui/node_modules/@tauri-apps/cli/tauri.js build --ci --config tauri.bundle.conf.json --bundles ${{ matrix.bundles }} @vulkan
 
       # linuxdeploy embarque une libwayland-client prise sur Ubuntu 22.04
       # qui, sur un hôte plus récent, masque celle du système et fait
@@ -364,6 +422,9 @@ jobs:
           exe=target/release/scripta-desktop
           [ "$RUNNER_OS" = Windows ] && exe="$exe.exe"
           sh scripts/empaquetage/jeu-instructions.sh "$exe"
+          if [ "${{ matrix.variante }}" = vulkan ]; then
+            sh scripts/empaquetage/liaison-vulkan.sh "$exe"
+          fi
 
       - name: Installeurs
         shell: bash
@@ -372,12 +433,17 @@ jobs:
           find target/release/bundle -maxdepth 2 -type f \
             \( -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' \) \
             -exec cp {} dist/ \;
+          # Même application, même identifiant : la variante Vulkan remplace
+          # la variante CPU à l'installation. Seuls les fichiers se distinguent.
+          if [ "${{ matrix.variante }}" = vulkan ]; then
+            for f in dist/Scripta_*; do mv "$f" "dist/Scripta-Vulkan_${f#dist/Scripta_}"; done
+          fi
           ls -l dist
           [ -n "$(ls dist)" ]
 
       - uses: actions/upload-artifact@v4
         with:
-          name: scripta-bureau-${{ matrix.target }}
+          name: scripta-bureau-${{ matrix.variante == 'vulkan' && 'vulkan-' || '' }}${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
