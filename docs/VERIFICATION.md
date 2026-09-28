@@ -53,6 +53,13 @@ $env:HTTPS_PROXY = "http://127.0.0.1:9"; scripta doctor; Remove-Item Env:HTTPS_P
 | Cache non inscriptible | `cache` : `NON INSCRIPTIBLE`, avec la cause |
 | Pas de réseau | trois destinations `INJOIGNABLE`, en deux secondes environ |
 
+> **Depuis une application empaquetée** (MSIX — un terminal ou un agent de
+> développement installé comme tel), un processus voit un `%LOCALAPPDATA%`
+> virtualisé : modèles et cache vont dans
+> `…\Packages\<application>\LocalCache\Local\scripta`, invisibles des autres
+> programmes, WSL compris. Un essai qui croit partager un cache retélécharge
+> alors tout. `SCRIPTA_MODELS_DIR` lève l'ambiguïté.
+
 ---
 
 ## 1. Modèle
@@ -650,8 +657,70 @@ celle que la CI produit avec le correctif.
 **Non vérifié sous Linux :** l'onglet « Modèles et outils », et une
 transcription réelle de bout en bout. Seul le premier écran a été vu.
 
----
+### Second poste, Linux — 2026-09-28
 
+WSL2, Ubuntu 26.04.1, WSLg, sur un i7-13700H **sans AVX-512** — un autre
+poste que celui du 2026-09-25. Artefacts de la répétition générale
+[36144146138](https://github.com/RevanSpec/Scripta/actions/runs/36144146138),
+tels que la CI les produit : l'AppImage, et la CLI Linux, placée à côté des
+sidecars que l'AppImage embarque. Rien d'installé dans la distribution.
+
+**La CLI.**
+
+| Vérification | Résultat |
+|---|---|
+| `doctor` | yt-dlp 2026.08.19 et ffmpeg 9.0.2 **embarqués**, backend `cpu`, trois destinations joignables |
+| « Me at the zoo », 19 s | 13,0 × temps réel, 3 segments, langue `en` détectée |
+| Vidéo de référence, 61 min, `-l fr` | **18,4 × temps réel**, 220 s en tout, **846 Mo** de crête, 954 segments |
+| Threads | 10 : WSL présente les 20 threads logiques comme 10 cœurs de deux threads |
+| Concordance avec les sous-titres officiels | **76 %**, contre 75 % sous Windows |
+| Concordance avec la build Windows du J3 | 87 % |
+| Pire série de segments identiques | 1, contre 7 sous Windows |
+
+C'est la **première inférence sous Linux** du projet : le dernier critère
+du Jalon 0. Le débit dépasse celui de Windows (15,8 × avec 14 threads), sans
+que la part du compilateur — GCC ici, MSVC là — et celle du nombre de threads
+aient été démêlées.
+
+Deux builds **CPU** ne rendent donc pas non plus le même texte : 87 % de
+concordance entre Linux et Windows, soit l'écart relevé entre CPU et Vulkan
+(88 %). Compilateur, nombre de threads et backend changent l'ordre des
+opérations flottantes. Aucun test ne doit exiger l'égalité entre deux builds.
+
+**L'application.**
+
+| Vérification | Résultat |
+|---|---|
+| Montage FUSE de l'AppImage | réussi sans `libfuse2` : son runtime n'en dépend pas |
+| `libGLESv2` | absente de cette Ubuntu minimale ; extraite du paquet `libgles2` et passée par `LD_LIBRARY_PATH`, sans installation |
+| Interface | s'affiche ; en-tête « CPU · 10 threads » |
+| Onglet « Modèles et outils » | yt-dlp et ffmpeg **embarqués** ; `base` et silero **installés** ; tailles identiques à `scripta models list` |
+| Sonde | titre, chaîne, durée et sous-titres auto-générés, affichés après la saisie |
+| **Transcription** | **échec** — « Illegal instruction », code 132, au lancement |
+
+**Cause : l'AVX-512 (risque R14 de la [roadmap](ROADMAP.md)).** ggml se
+compile par défaut pour le processeur de la machine de build, et celles de
+GitHub Actions varient d'un job à l'autre. Décompte des instructions AVX-512
+(registres `zmm`) :
+
+| Binaire | AVX-512 | AVX / AVX2 |
+|---|---|---|
+| CLI Linux, **v0.1.1 publiée** | **6 217** | 13 392 |
+| CLI Linux, répétition 36144146138 | 26 | 14 210 |
+| Application Linux, même répétition | **6 217** | 13 483 |
+| CLI Windows, v0.1.1 publiée | 26 | 11 828 |
+| Application Windows, répétition 36144146138 | **4 838** | 11 381 |
+| Application Windows, répétition 36006876371 | 26 | 11 852 |
+
+Les 26 des binaires sains appartiennent à `crc32fast`, qui ne les emploie
+qu'après avoir interrogé le processeur. Les autres sont les noyaux de ggml,
+compilés pour une machine à AVX-512. **La CLI Linux publiée de la v0.1.1
+meurt de même**, au chargement du modèle : vérifié sur ce poste.
+
+Correctif : `GGML_NATIVE=OFF` dans le workflow de release, et un contrôle de
+chaque binaire x86-64 (`scripts/empaquetage/jeu-instructions.sh`), éprouvé
+sur les six binaires ci-dessus : il accepte les trois sains, refuse les
+trois autres.
 
 ---
 
