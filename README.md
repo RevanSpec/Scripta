@@ -33,7 +33,7 @@ embarquent yt-dlp et ffmpeg.
 | Cache de transcriptions | ✅ |
 | Mise à jour de l'extracteur | ✅ |
 | Binaires précompilés (CLI) | ✅ v0.2.0 |
-| Application de bureau | ✅ Windows · Linux : démarre, transcription à éprouver · macOS : jamais lancée |
+| Application de bureau | ✅ Windows et Linux · macOS : jamais lancée |
 | Installeurs de l'application | ✅ v0.2.0, non signés |
 | Accélération GPU | ⏳ Vulkan éprouvé, à compiler soi-même ; non distribuée |
 

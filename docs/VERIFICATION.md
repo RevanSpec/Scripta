@@ -722,6 +722,45 @@ chaque binaire x86-64 (`scripts/empaquetage/jeu-instructions.sh`), éprouvé
 sur les six binaires ci-dessus : il accepte les trois sains, refuse les
 trois autres.
 
+**Après correction.** L'AppImage de la répétition de la #15, bâtie sans
+compilation native, transcrit la vidéo de référence de bout en bout dans
+l'application : **15,8 × temps réel**, 954 segments — autant que la CLI —,
+crête de **868 Mo** contre 882 sous Windows, avec la progression, les segments
+au fil de l'eau et une fenêtre réactive.
+
+**Mise à jour de yt-dlp (ADR-004).** Premier essai, sur cette même AppImage :
+« Mettre à jour » installe dans `~/.cache/scripta/bin` l'archive Python
+`yt-dlp`, l'asset que visait alors la mise à jour sous Linux, et non
+l'exécutable autonome `yt-dlp_linux` qu'embarque l'application. L'archive
+s'exécute depuis un terminal, mais pas depuis l'AppImage, qui la déclare
+**« introuvable »**. Comme la copie utilisateur passe avant la copie
+embarquée, l'extraction devient impossible (risque R15, corrigé par la #16).
+
+Sur l'AppImage de la v0.2.0, qui porte le correctif, à partir de ce même état
+cassé :
+
+| Vérification | Résultat |
+|---|---|
+| Au démarrage | bandeau « yt-dlp est introuvable » : l'archive du premier essai masque la copie embarquée |
+| « Mettre à jour » | « yt-dlp 2026.08.19 installé et vérifié » ; la ligne passe à « mis à jour » |
+| Fichier installé | `~/.cache/scripta/bin/yt-dlp`, exécutable ELF x86-64 de 40,4 Mo, sans résidu d'essai |
+| Copie embarquée | intacte : l'AppImage est montée en lecture seule |
+| Transcription avec la copie mise à jour | « Me at the zoo », 11,8 × temps réel |
+
+C'est le critère ADR-004 du Jalon 4, sous Linux.
+
+### Téléchargement des modèles — 2026-09-28
+
+En voulant mesurer `turbo` (547 Mo) : cinq tentatives, cinq échecs sur
+`timeout: receive body`. Le délai de 60 s passé à ureq bornait la réception
+du fichier **entier**, pas un silence du serveur (risque R16). Le `.part`
+avançait d'une centaine de mégaoctets par tentative ; l'utilisateur, lui,
+voyait une erreur à chaque minute.
+
+Après correction — tranches de 16 Mio, chacune bornée à 60 s —, `small`
+(181 Mio) arrive **en un seul essai de 95 s** depuis HuggingFace, au-delà de
+l'ancien plafond, empreinte conforme.
+
 ---
 
 ## Quoi rapporter

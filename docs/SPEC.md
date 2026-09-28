@@ -374,7 +374,7 @@ La même règle s'applique à la lecture de `stdout` : elle doit se faire dans u
 - **Référencement par révision épinglée**, jamais par `main` : une URL de branche n'est pas reproductible et invaliderait les empreintes.
 - Vérification d'intégrité **SHA-256** obligatoire contre une table embarquée dans le binaire. Un fichier dont l'empreinte diffère est supprimé et l'opération échoue (code 30).
 - Téléchargement vers un fichier temporaire `.part` dans le répertoire cible, puis renommage atomique — un `Ctrl-C` pendant le téléchargement ne laisse jamais un modèle tronqué qui serait ensuite considéré comme valide.
-- Timeouts explicites : 30 s à la connexion, 60 s d'inactivité. Reprise sur `Range` si le serveur la supporte.
+- Timeouts explicites : 30 s à la connexion ; puis un fichier demandé par tranches de 16 Mio, chacune reçue en 60 s au plus, soit un débit plancher d'environ 280 Ko/s. Reprise sur `Range` si le serveur la supporte. *(Corrigé le 2026-09-28 : les 60 s bornaient la réception du fichier **entier**, et tout modèle qu'il fallait plus d'une minute pour recevoir échouait — risque R16.)*
 - Barre de progression sur `stderr`.
 
 **Modèle VAD.** Le modèle Silero utilisé par [SF-04](#sf-04--moteur-de-transcription-locale) (`ggml-silero-v5.1.2.bin`, ≈ 2 Mo) suit le même cycle de vie et est téléchargé à la première utilisation.
@@ -526,6 +526,8 @@ YouTube modifie fréquemment ses mécanismes d'extraction : un `yt-dlp` embarqu�
 - Commande CLI `scripta update-extractor`, bouton équivalent en GUI.
 - **Conformément à [ADR-004](#adr-004--emplacement-des-sidecars-mis-à-jour), la mise à jour écrit exclusivement dans `<data_dir>/scripta/bin/` et ne touche jamais au bundle signé.** Le mécanisme interne `yt-dlp -U` n'est donc **pas** utilisé sur la copie embarquée ; la dernière version est téléchargée depuis les *releases* GitHub de yt-dlp, vérifiée, puis installée à l'emplacement inscriptible.
 - Vérification d'intégrité contre le fichier `SHA2-256SUMS` publié avec chaque release.
+- L'artefact téléchargé est l'**exécutable autonome** de la plateforme — `yt-dlp_linux` sous Linux, comme la copie embarquée —, jamais l'archive Python `yt-dlp`, qui exige un interpréteur sur le poste. *(Corrigé le 2026-09-28 — risque R15.)*
+- La copie téléchargée est **exécutée avant d'être installée** : si elle ne rend pas sa version, elle est supprimée et la copie en place conservée. Une mise à jour ne peut donc jamais masquer une copie qui fonctionne.
 - Sur macOS, le binaire téléchargé reçoit une signature ad-hoc (`codesign -s -`) et l'attribut de quarantaine est retiré, faute de quoi il ne s'exécutera pas sur Apple Silicon.
 - Vérification de disponibilité au démarrage, au plus une fois par période de 24 h, sans blocage et sans télémétrie. Désactivable par `SCRIPTA_NO_UPDATE_CHECK=1`.
 
@@ -893,7 +895,7 @@ jamais requis (voir §5.4).
 
 ## Annexe C — Journal des corrections
 
-**v2.5** — Jeu d'instructions des binaires distribués : base AVX2, compilation native écartée, contrôle à la build (§5.3, §5.4 — risque R14).
+**v2.5** — Jeu d'instructions des binaires distribués : base AVX2, compilation native écartée, contrôle à la build (§5.3, §5.4 — risque R14). Téléchargement des modèles par tranches (SF-03, R16). Mise à jour de yt-dlp : exécutable autonome, essayé avant d'être installé (SF-06, R15).
 
 **v2.4** — Jalon 4, premier lot : sidecars embarqués dans l'application de bureau, build FFmpeg minimale mesurée (§5.4, Annexe D), déclaration `externalBin` propre au bundle et noms préfixés (§4.2), obligations de licence mises en œuvre (§1.3) ; hypothèse sur les rappels de whisper-rs précisée (Annexe D) ; signature abandonnée (§1.3, §5.4, ADR-004 — décision du 2026-09-24).
 
