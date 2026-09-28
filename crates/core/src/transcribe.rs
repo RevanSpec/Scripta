@@ -94,6 +94,11 @@ pub struct Gpu {
 pub fn preferred_gpu() -> Option<Gpu> {
     use whisper_rs_sys as sys;
 
+    // Le registre de ggml énumère ses périphériques à la première
+    // interrogation, et le dit sur `stderr` : à taire, comme au chargement
+    // d'un modèle, sauf en `--verbose`. `doctor` l'interroge avant tout.
+    silence_native_logs();
+
     let mut rang: c_int = 0;
     let mut integre = None;
     // SAFETY : le registre de ggml s'initialise à la première interrogation,
