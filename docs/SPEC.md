@@ -1,6 +1,6 @@
 # Scripta — Cahier des charges technique et fonctionnel
 
-**Version :** 2.5
+**Version :** 2.6
 **Statut :** Validé pour implémentation — ADR-001 révisé au Jalon 0, SF-04 précisé au Jalon 2
 **Révision précédente :** 1.0 (voir [Annexe C — Journal des corrections](#annexe-c--journal-des-corrections))
 
@@ -177,6 +177,25 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
 - **Deux artefacts par plateforme** sous Windows et Linux, un seul sous macOS. Le [Jalon 4](ROADMAP.md#jalon-4--packaging-et-cicd) s'alourdit d'autant (estimation révisée : +2 j).
 - Le téléchargement doit orienter l'utilisateur vers le bon artefact ; `scripta doctor` indique le backend compilé et signale qu'une variante accélérée existe.
 - À réexaminer lorsque `whisper-rs-sys` exposera `GGML_BACKEND_DL` : la décision initiale redeviendrait alors applicable et supprimerait un artefact.
+
+> **Mis en œuvre au Jalon 4 (tâche 4.3, 2026-09-28).** Un tag produit, à
+> côté des artefacts CPU, la variante Vulkan de la CLI
+> (`scripta-vulkan-<version>-<triplet>`) et de l'application
+> (`Scripta-Vulkan_…`), sous Windows et Linux. Même application et même
+> identifiant : la variante Vulkan remplace la variante CPU à l'installation.
+>
+> - **Le chargeur Vulkan vient du système** — le pilote graphique sous
+>   Windows, `libvulkan1` sous Linux —, jamais du paquet : l'AppImage en
+>   retire la copie que son outil d'empaquetage embarque, et le `.deb` en
+>   dépend. Sans chargeur, la variante Vulkan ne démarre pas ; la variante
+>   CPU, si.
+> - **La carte dédiée prime sur la puce intégrée.** ggml énumère ses
+>   périphériques dans l'ordre du pilote, et whisper.cpp retient le premier :
+>   sur un portable hybride, c'était la puce intégrée (risque R17).
+>   `transcribe::preferred_gpu` désigne le premier GPU dédié, à défaut le
+>   premier intégré, et `doctor` le nomme.
+> - **Le SDK Vulkan**, requis à la seule compilation, est épinglé par son
+>   empreinte (`scripts/empaquetage/vulkan.env`), comme les sidecars.
 
 #### ADR-002 — Pipeline audio sans shell
 
@@ -374,7 +393,7 @@ La même règle s'applique à la lecture de `stdout` : elle doit se faire dans u
 - **Référencement par révision épinglée**, jamais par `main` : une URL de branche n'est pas reproductible et invaliderait les empreintes.
 - Vérification d'intégrité **SHA-256** obligatoire contre une table embarquée dans le binaire. Un fichier dont l'empreinte diffère est supprimé et l'opération échoue (code 30).
 - Téléchargement vers un fichier temporaire `.part` dans le répertoire cible, puis renommage atomique — un `Ctrl-C` pendant le téléchargement ne laisse jamais un modèle tronqué qui serait ensuite considéré comme valide.
-- Timeouts explicites : 30 s à la connexion, 60 s d'inactivité. Reprise sur `Range` si le serveur la supporte.
+- Timeouts explicites : 30 s à la connexion ; puis un fichier demandé par tranches de 16 Mio, chacune reçue en 60 s au plus, soit un débit plancher d'environ 280 Ko/s. Reprise sur `Range` si le serveur la supporte. *(Corrigé le 2026-09-28 : les 60 s bornaient la réception du fichier **entier**, et tout modèle qu'il fallait plus d'une minute pour recevoir échouait — risque R16.)*
 - Barre de progression sur `stderr`.
 
 **Modèle VAD.** Le modèle Silero utilisé par [SF-04](#sf-04--moteur-de-transcription-locale) (`ggml-silero-v5.1.2.bin`, ≈ 2 Mo) suit le même cycle de vie et est téléchargé à la première utilisation.
@@ -526,6 +545,8 @@ YouTube modifie fréquemment ses mécanismes d'extraction : un `yt-dlp` embarqu�
 - Commande CLI `scripta update-extractor`, bouton équivalent en GUI.
 - **Conformément à [ADR-004](#adr-004--emplacement-des-sidecars-mis-à-jour), la mise à jour écrit exclusivement dans `<data_dir>/scripta/bin/` et ne touche jamais au bundle signé.** Le mécanisme interne `yt-dlp -U` n'est donc **pas** utilisé sur la copie embarquée ; la dernière version est téléchargée depuis les *releases* GitHub de yt-dlp, vérifiée, puis installée à l'emplacement inscriptible.
 - Vérification d'intégrité contre le fichier `SHA2-256SUMS` publié avec chaque release.
+- L'artefact téléchargé est l'**exécutable autonome** de la plateforme — `yt-dlp_linux` sous Linux, comme la copie embarquée —, jamais l'archive Python `yt-dlp`, qui exige un interpréteur sur le poste. *(Corrigé le 2026-09-28 — risque R15.)*
+- La copie téléchargée est **exécutée avant d'être installée** : si elle ne rend pas sa version, elle est supprimée et la copie en place conservée. Une mise à jour ne peut donc jamais masquer une copie qui fonctionne.
 - Sur macOS, le binaire téléchargé reçoit une signature ad-hoc (`codesign -s -`) et l'attribut de quarantaine est retiré, faute de quoi il ne s'exécutera pas sur Apple Silicon.
 - Vérification de disponibilité au démarrage, au plus une fois par période de 24 h, sans blocage et sans télémétrie. Désactivable par `SCRIPTA_NO_UPDATE_CHECK=1`.
 
@@ -773,6 +794,7 @@ OPTIONS DE `run` :
 > selon la charge concurrente.
 >
 > Les seuils GPU restent **non mesurés** : aucune machine de test disponible.
+> *(Mesurés depuis : voir le Jalon 4, ci-dessous.)*
 >
 > **Mesuré au Jalon 3.** Même vidéo de 61 min, modèle `base`, VAD actif,
 > horodatage au mot, depuis l'application de bureau en build optimisée : **14,0 ×
@@ -783,6 +805,22 @@ OPTIONS DE `run` :
 > d'acceptation de la CLI, rejouée dans les mêmes conditions, mesure
 > **15,8 ×** — 266 s pour l'heure de vidéo, contre 598 s au J2 —, pic mémoire
 > et concordance inchangés (863 Mo, 75 %).
+
+> **Mesuré au Jalon 4 (GPU).** Vidéo de référence, VAD, variante Vulkan
+> construite par la CI, machine au repos :
+>
+> | Configuration | `base` | `turbo` |
+> |---|---|---|
+> | NVIDIA RTX A1000 6 Go (portable), 2026-09-28 | **55,8 ×** | **25,1 ×** |
+> | La puce Intel UHD du même portable | 13,6 × | — |
+> | Le CPU du même portable, 14 threads | 13,4 × | — |
+> | NVIDIA RTX 3070, 2026-09-25, machine chargée à 36 % | 42,2 × | — |
+>
+> Le seuil de 8 × avec `turbo`, sur un GPU de 6 Go, est donc tenu d'un
+> facteur trois. Deux leçons : sur la puce intégrée, la variante accélérée
+> n'apporte rien (risque R17) ; et une charge voisine la pénalise autant que
+> le CPU — sous 74 % de charge, la RTX A1000 tombait à 22,1 × avec `base`. Le
+> relevé de la RTX 3070, fait sous charge, la sous-estime probablement.
 
 **Autres seuils :**
 
@@ -829,6 +867,7 @@ jamais requis (voir §5.4).
 - **Build FFmpeg minimal** : seuls les décodeurs (`opus`, `vorbis`, `aac`, `mp3`), démultiplexeurs (`matroska`, `mov`, `mp3`) et le rééchantillonneur sont nécessaires. Une build ciblée descend autour de 10–15 Mo, contre 60–70 Mo pour une build complète. *(Mesuré au J4 : FFmpeg 9.0.2 statique, sous LGPL, sans bibliothèque externe — **3,2 Mo** sous Linux, **1,9 Mo** sous Windows et macOS. S'y ajoutent les démultiplexeurs `ogg`, `aac` et `wav`, par prudence. Sur sa propre plateforme, chaque binaire décode cinq échantillons — Opus, Vorbis, AAC, MP3, MP4 avec image — par la commande même du cœur. Construction : `scripts/sidecars/build-ffmpeg.sh` ; Windows se compile depuis Linux par mingw-w64.)*
 - ~~Sur macOS, **tous** les binaires du bundle — application et sidecars — doivent être signés et notarisés ensemble, avec les droits d'exécution appropriés.~~ **Aucune signature** (décision du 2026-09-24) : ni Developer ID ni notarisation sous macOS, ni Authenticode sous Windows. Gatekeeper et SmartScreen avertissent au premier lancement ; le README donne la marche à suivre. Sur Apple Silicon, chaque binaire garde la signature *ad hoc* que lui appose l'éditeur de liens — sans elle, macOS refuserait de l'exécuter —, ce qui n'engage aucun compte ni certificat.
 - **Jeu d'instructions** *(risque R14, 2026-09-28)* : les binaires distribués sont compilés sans `GGML_NATIVE` — base x86-64 AVX2, et premier Apple Silicon sous macOS. Compilé pour la machine de build, un binaire hérite de ses extensions : l'AVX-512 d'une machine de GitHub est ainsi entré dans la CLI Linux de la v0.1.1, qui meurt sur « Illegal instruction » partout où il manque. Chaque binaire x86-64 est contrôlé à la build (`scripts/empaquetage/jeu-instructions.sh`) : ni AVX-512, ni moins que l'AVX2. Une build locale reste native — elle ne quitte pas sa machine.
+- **Variantes Vulkan** *(tâche 4.3)* : la CLI et l'application existent aussi en variante Vulkan, sous Windows et Linux — voir [ADR-001](#adr-001--stratégie-daccélération-matérielle). Chaque binaire de cette variante est contrôlé à la build : il doit se lier au chargeur Vulkan (`scripts/empaquetage/liaison-vulkan.sh`).
 - Chaque release publie un fichier de sommes de contrôle et la liste des versions de sidecars embarquées. *(J4 : versions et empreintes dans `scripts/sidecars/versions.env`, qui refuse tout fichier ne portant pas la sienne ; fiche de construction de FFmpeg dans chaque installeur.)*
 - *(v0.1.x.)* Les archives de la CLI n'embarquent aucun sidecar. Elles joignent `LICENSE`, `THIRD_PARTY_LICENSES.md` et l'inventaire des licences des bibliothèques compilées (`LICENCES-DEPENDANCES.md`, généré par `cargo about` ; `about.toml` fixe les licences acceptées). Un tag produit un **brouillon** de release, publié à la main après relecture.
 
@@ -893,7 +932,9 @@ jamais requis (voir §5.4).
 
 ## Annexe C — Journal des corrections
 
-**v2.5** — Jeu d'instructions des binaires distribués : base AVX2, compilation native écartée, contrôle à la build (§5.3, §5.4 — risque R14).
+**v2.6** — Jalon 4, variantes Vulkan : mise en œuvre d'ADR-001 (chargeur du système, carte dédiée, SDK épinglé), seuils GPU du §5.2 mesurés, variantes au §5.4, Annexe D (risque R17).
+
+**v2.5** — Jeu d'instructions des binaires distribués : base AVX2, compilation native écartée, contrôle à la build (§5.3, §5.4 — risque R14). Téléchargement des modèles par tranches (SF-03, R16). Mise à jour de yt-dlp : exécutable autonome, essayé avant d'être installé (SF-06, R15).
 
 **v2.4** — Jalon 4, premier lot : sidecars embarqués dans l'application de bureau, build FFmpeg minimale mesurée (§5.4, Annexe D), déclaration `externalBin` propre au bundle et noms préfixés (§4.2), obligations de licence mises en œuvre (§1.3) ; hypothèse sur les rappels de whisper-rs précisée (Annexe D) ; signature abandonnée (§1.3, §5.4, ADR-004 — décision du 2026-09-24).
 
@@ -916,7 +957,7 @@ jamais requis (voir §5.4).
 | `whisper-rs` expose `abort_callback` | ✅ **Confirmée — par l'API brute** (J2, J3) | Les trois rappels existent, mais leurs versions « sûres » ne le sont pas en 0.16.0 : `set_abort_callback_safe` confond les types, `set_progress_callback_safe` et `set_segment_callback_safe` fuient leur fermeture à chaque inférence. Scripta passe par des trampolines prêtés le temps de l'appel (`crates/core/src/transcribe.rs`) |
 | Chargement dynamique des backends ggml | ❌ **Invalidée** | Non exposé : sélection par feature Cargo, liaison statique. Repli appliqué — voir [ADR-001](#adr-001--stratégie-daccélération-matérielle) |
 | VAD Silero accessible depuis `whisper-rs` | ✅ **Confirmée — mais pas par la voie prévue** (J2) | La détection (`WhisperVadContext`) fonctionne. En revanche `enable_vad` est sans effet via whisper-rs : `WhisperState::full` appelle `whisper_full_with_state`, qui ignore `params.vad`. Et la voie `whisper_full` laisse les tokens dans la chronologie compactée. VAD orchestré par Scripta — voir [SF-04](#sf-04--moteur-de-transcription-locale) |
-| Vulkan atteint les seuils du [§5.2](#52-performance) | ⏳ **Reportée au J4** | Aucune machine GPU disponible. À mesurer quand la variante Vulkan sera construite ([Jalon 4](ROADMAP.md#jalon-4--packaging-et-cicd)). Repli : les seuils GPU restent indicatifs, le CPU tient les siens |
+| Vulkan atteint les seuils du [§5.2](#52-performance) | ✅ **Confirmée** (J4) | Sur une RTX A1000 6 Go, `turbo` à 25,1 × contre un seuil de 8 ×, `base` à 55,8 ×. À condition de retenir la carte dédiée : ggml énumère d'abord la puce intégrée d'un portable hybride (R17) |
 | Build FFmpeg minimale ≤ 15 Mo | ✅ **Confirmée** (J4) | 3,2 Mo sous Linux, 1,9 Mo sous Windows et macOS, contre 60 à 145 Mo pour une build complète. Voir [§5.4](#54-distribution-et-packaging) |
 
 ## Annexe E — Prérequis de compilation

@@ -7,6 +7,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # R14 : la build passe d'une machine de GitHub à l'autre par le cache, et
+  # leurs processeurs diffèrent. Compilé nativement sur une machine dotée de
+  # l'AVX-512, ggml meurt sur « Illegal instruction » dès qu'un test
+  # l'initialise sur une autre — la veille l'a vécu. Base AVX2, comme pour
+  # les binaires publiés.
+  GGML_NATIVE: "OFF"
 
 jobs:
   # SPEC §5.5 : aucun test de la CI de PR ne touche le réseau. YouTube est
@@ -66,7 +72,11 @@ jobs:
       # ferait diverger la CI du poste de travail à chaque publication de Rust.
       - name: Toolchain
         run: rustup show
+      # La clé écarte les caches compilés en natif : whisper-rs-sys ne se
+      # recompile pas quand GGML_NATIVE change.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ggml-sans-natif
 
       # Le frontend est bâti avant toute compilation Rust : c'est aussi sa
       # vérification de types (svelte-check), la seule frontière du projet que

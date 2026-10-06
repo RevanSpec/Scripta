@@ -1099,6 +1099,25 @@ fn doctor() -> scripta_core::Result<()> {
             "  {:<12} build CPU ; pour un GPU, compiler avec --features vulkan (ou metal)",
             ""
         );
+    } else {
+        // Sur un portable hybride, la puce intégrée et le GPU dédié sont tous
+        // deux visibles : dire lequel travaillera.
+        match scripta_core::transcribe::preferred_gpu() {
+            Some(gpu) => println!(
+                "  {:<12} {} ({})",
+                "GPU",
+                gpu.name,
+                if gpu.dedicated {
+                    "dédié"
+                } else {
+                    "intégré"
+                }
+            ),
+            None => println!(
+                "  {:<12} aucun GPU visible : l'inférence se fera sur le CPU",
+                "GPU"
+            ),
+        }
     }
     let installes: Vec<&str> = models::installed()?
         .into_iter()
