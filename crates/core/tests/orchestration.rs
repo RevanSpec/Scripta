@@ -135,18 +135,69 @@ fn avec_prefer_subs_la_sonde_precede_le_modele() {
 }
 
 #[test]
-fn une_video_trop_longue_est_refusee_avant_l_extraction() {
+fn une_video_trop_longue_est_refusee_avant_de_charger_un_modele() {
+    // 834 min : au-delà des 720 du défaut. Sans sous-titres, l'inférence est
+    // certaine, et le plafond tombe avant que l'on charge — voire télécharge —
+    // un modèle pour rien : l'événement « Loading » n'a pas lieu.
     let dir = fixtures();
     let mut req = requete(ytdlp_repondant(
         dir.path(),
-        r#"{"id":"dQw4w9WgXcQ","title":"Long","duration":20000}"#,
+        r#"{"id":"dQw4w9WgXcQ","title":"Long","duration":50000}"#,
     ));
     req.prefer_subs = true;
 
     let (issue, trace) = executer(&req, &CancelToken::new());
     let e = issue.expect_err("vidéo trop longue");
     assert_eq!(e.exit_code(), 14, "{e}");
-    assert_eq!(trace.noms(), ["CacheKey", "Probing"]);
+    assert_eq!(
+        trace.noms(),
+        ["CacheKey", "Probing", "Probed", "SubtitlesFallback"]
+    );
+}
+
+#[test]
+fn douze_heures_passent_le_plafond_par_defaut() {
+    // 720 min pile : le plafond ne les refuse pas. C'est le modèle, absent du
+    // test, qui arrête ici — le chargement est donc bien atteint.
+    let dir = fixtures();
+    let mut req = requete(ytdlp_repondant(
+        dir.path(),
+        r#"{"id":"dQw4w9WgXcQ","title":"Webinaire","duration":43200}"#,
+    ));
+    req.prefer_subs = true;
+
+    let (issue, trace) = executer(&req, &CancelToken::new());
+    let e = issue.expect_err("modèle absent");
+    assert_eq!(e.exit_code(), 30, "{e}");
+    assert_eq!(trace.noms().last().map(String::as_str), Some("Loading"));
+}
+
+#[test]
+fn les_sous_titres_precedent_le_plafond_de_duree() {
+    // Des sous-titres n'occupent aucune mémoire : une vidéo de 14 h n'est pas
+    // refusée d'entrée quand on les préfère. Ici la piste est injoignable —
+    // le port 1 de la boucle locale est fermé —, le repli sur l'inférence
+    // s'ensuit, et c'est alors seulement que le plafond tombe.
+    let dir = fixtures();
+    let mut req = requete(ytdlp_repondant(
+        dir.path(),
+        r#"{"id":"dQw4w9WgXcQ","duration":50000,"subtitles":{"fr":[{"url":"http://127.0.0.1:1/"}]}}"#,
+    ));
+    req.prefer_subs = true;
+
+    let (issue, trace) = executer(&req, &CancelToken::new());
+    assert_eq!(issue.expect_err("vidéo trop longue").exit_code(), 14);
+    assert_eq!(
+        trace.noms(),
+        [
+            "CacheKey",
+            "Probing",
+            "Probed",
+            "Subtitles",
+            "SubtitlesFailed",
+            "SubtitlesFallback"
+        ]
+    );
 }
 
 #[test]

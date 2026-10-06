@@ -212,14 +212,23 @@ pub fn parse_metadata(json: &[u8]) -> Result<Metadata> {
     })
 }
 
-/// Contrôle de recevabilité avant toute extraction — SPEC SF-07.
+/// Refuse un direct — SPEC SF-07.
 ///
-/// Appelé **avant** le pipeline : un direct produit un flux de durée non bornée
-/// qui épuiserait la mémoire (ADR-003).
-pub fn check_admissible(meta: &Metadata, max_duration_min: u64) -> Result<()> {
+/// Appelé **avant** le pipeline, et quoi qu'on demande, sous-titres compris :
+/// un direct produit un flux de durée non bornée qui épuiserait la mémoire
+/// (ADR-003).
+pub fn check_not_live(meta: &Metadata) -> Result<()> {
     if meta.is_live_content() {
         return Err(ScriptaError::LiveNotSupported);
     }
+    Ok(())
+}
+
+/// Refuse une vidéo plus longue que `max_duration_min` — `--max-duration`.
+///
+/// Ne vaut que pour l'inférence, dont l'audio tient en mémoire : des
+/// sous-titres officiels n'en occupent aucune, quelle que soit la durée.
+pub fn check_duration(meta: &Metadata, max_duration_min: u64) -> Result<()> {
     if let Some(d) = meta.duration {
         let actual_min = (d / 60.0).ceil() as u64;
         if actual_min > max_duration_min {
@@ -230,6 +239,13 @@ pub fn check_admissible(meta: &Metadata, max_duration_min: u64) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Contrôle de recevabilité complet avant une inférence : ni direct, ni durée
+/// excessive.
+pub fn check_admissible(meta: &Metadata, max_duration_min: u64) -> Result<()> {
+    check_not_live(meta)?;
+    check_duration(meta, max_duration_min)
 }
 
 #[cfg(test)]
@@ -300,6 +316,27 @@ mod tests {
             other => panic!("attendu TooLong, obtenu {other:?}"),
         }
         assert!(check_admissible(&m, 360).is_ok());
+    }
+
+    #[test]
+    fn le_plafond_de_duree_se_controle_a_part_du_direct() {
+        // Des sous-titres n'ont pas besoin du plafond : seul un direct est
+        // refusé quoi qu'on demande.
+        let long = parse_metadata(br#"{"id":"a","duration":86400.0}"#).unwrap(); // 24 h
+        assert!(check_not_live(&long).is_ok());
+        assert!(matches!(
+            check_duration(&long, 720),
+            Err(ScriptaError::TooLong {
+                actual_min: 1440,
+                limit_min: 720
+            })
+        ));
+        let direct = parse_metadata(br#"{"id":"a","is_live":true,"duration":60.0}"#).unwrap();
+        assert!(matches!(
+            check_not_live(&direct),
+            Err(ScriptaError::LiveNotSupported)
+        ));
+        assert!(check_duration(&direct, 720).is_ok());
     }
 
     #[test]

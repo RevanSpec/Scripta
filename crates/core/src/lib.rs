@@ -22,6 +22,7 @@ pub mod diagnostic;
 pub mod document;
 pub mod error;
 pub mod format;
+pub mod memoire;
 pub mod models;
 pub mod output;
 pub mod paths;
