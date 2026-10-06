@@ -496,7 +496,8 @@ Scripta transcrit par défaut jusqu'à **12 h** d'audio (`--max-duration`).
 L'audio tient tout entier en mémoire : environ **0,54 Go par heure**, plus
 1 Go. Pour 12 h, comptez 9 Go de mémoire libre — 12 Go avec
 `--word-timestamps`, qui y ajoute 40 %. Mesuré : 12 h d'audio transcrites en
-20 minutes avec `tiny`, pour 6,5 Go engagés au pic.
+20 minutes avec `tiny`, pour 6,5 Go engagés au pic. La v0.2.0 et les versions
+précédentes s'arrêtent à 4 h, sans contrôle de la mémoire.
 
 Quand la mémoire disponible ne suffit pas, Scripta refuse d'entrée, par le code
 `15`, et dit jusqu'où elle le permet, plutôt que de s'arrêter sans message en
