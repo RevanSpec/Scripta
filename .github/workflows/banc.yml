@@ -1,0 +1,152 @@
+name: Banc de performance
+
+# Tâche 4.8 — SPEC §5.2 : suivre le débit d'inférence d'un commit à l'autre,
+# sans jamais bloquer. Échantillon fixe, sans réseau vers YouTube : jfk.wav de
+# whisper.cpp, répété trente fois — 330 s de parole —, avec le modèle `base`
+# et le VAD, compilés comme les binaires distribués (GGML_NATIVE=OFF, R14).
+#
+# Les machines de GitHub varient d'un job à l'autre : chaque mesure consigne
+# son modèle de processeur, et seules se comparent les mesures faites sur le
+# même. Un débit ne se mesure d'ailleurs que sur une machine au repos (R6) :
+# celui d'une machine partagée donne une tendance, jamais un seuil.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/banc.yml"
+      - "crates/core/examples/banc.rs"
+
+# L'historique passe d'un run au suivant : deux runs simultanés s'en
+# disputeraient la dernière version.
+concurrency:
+  group: banc
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+  GGML_NATIVE: "OFF"
+  JFK_URL: https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.8.3/samples/jfk.wav
+  JFK_SHA256: 59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e
+  REPETITIONS: "30"
+
+jobs:
+  banc:
+    name: Banc
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prérequis natifs
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
+
+      - name: Toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compilation
+        run: |
+          cargo build --release --locked -p scripta-cli
+          cargo build --release --locked -p scripta-core --example banc
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/scripta-banc
+          key: banc-fixtures-${{ hashFiles('crates/core/src/models.rs') }}-${{ env.JFK_SHA256 }}
+
+      # Modèles par la CLI elle-même : même téléchargement vérifié que chez
+      # l'utilisateur. Échantillon par son empreinte épinglée.
+      - name: Fixtures
+        shell: bash
+        run: |
+          f="$HOME/.cache/scripta-banc"
+          mkdir -p "$f/modeles"
+          export SCRIPTA_MODELS_DIR="$f/modeles"
+          target/release/scripta models pull base
+          target/release/scripta models pull silero
+          if [ "$(sha256sum "$f/jfk.wav" 2>/dev/null | cut -d' ' -f1)" != "$JFK_SHA256" ]; then
+            curl -fsSL --retry 3 -o "$f/jfk.wav" "$JFK_URL"
+            echo "$JFK_SHA256  $f/jfk.wav" | sha256sum -c -
+          fi
+
+      - name: Mesure
+        id: mesure
+        shell: bash
+        run: |
+          f="$HOME/.cache/scripta-banc"
+          mesure=$(target/release/examples/banc "$f/modeles/ggml-base.bin" "$f/jfk.wav" "$REPETITIONS" \
+            "$f/modeles/ggml-silero-v5.1.2.bin")
+          # Démarrage de la CLI, seuil de 150 ms au §5.2 : médiane de vingt.
+          demarrage=$(for i in $(seq 20); do
+            debut=$(date +%s%N); target/release/scripta --version > /dev/null; fin=$(date +%s%N)
+            echo $(( (fin - debut) / 1000000 ))
+          done | sort -n | sed -n 10p)
+          cpu=$(lscpu | sed -n 's/^Model name: *//p' | head -1)
+          python3 - "$mesure" "$demarrage" "$cpu" > mesure.json <<'EOF'
+          import json, sys, datetime, os
+          m = json.loads(sys.argv[1])
+          m.update(
+              demarrage_ms=int(sys.argv[2]),
+              processeur=sys.argv[3],
+              date=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M"),
+              commit=os.environ["GITHUB_SHA"][:7],
+          )
+          print(json.dumps(m, ensure_ascii=False))
+          EOF
+          cat mesure.json
+
+      # Le dernier historique de main, s'il existe : c'est lui qu'on prolonge.
+      - name: Historique précédent
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          precedent=$(gh run list --workflow banc.yml --branch main --status success --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$precedent" ]; then
+            gh run download "$precedent" -n historique-banc -D precedent || echo "Aucun historique au run $precedent."
+          fi
+          cat precedent/historique.jsonl 2>/dev/null > historique.jsonl || true
+          cat mesure.json >> historique.jsonl
+          wc -l historique.jsonl
+
+      - name: Résumé
+        shell: bash
+        run: |
+          python3 - >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          import json, statistics
+          lignes = [json.loads(l) for l in open("historique.jsonl", encoding="utf-8") if l.strip()]
+          m = lignes[-1]
+          pairs = [l["vitesse"] for l in lignes[:-1] if l.get("processeur") == m["processeur"]]
+          print(f"### {m['vitesse']} × temps réel — modèle `base`, VAD, {m['threads']} threads")
+          print()
+          print(f"{m['audio_s']} s d'audio en {m['inference_s']} s ; démarrage de la CLI : {m['demarrage_ms']} ms. Processeur : {m['processeur']}.")
+          print()
+          if pairs:
+              med = statistics.median(pairs)
+              ecart = 100 * (m["vitesse"] - med) / med
+              print(f"Médiane des {len(pairs)} mesures précédentes sur ce processeur : {med} ×, soit un écart de {ecart:+.0f} %.")
+              if ecart < -20:
+                  print()
+                  print("**Recul de plus de 20 %** — à confirmer par une seconde mesure : une machine partagée varie.")
+          else:
+              print("Première mesure sur ce processeur : rien à comparer.")
+          print()
+          print("| Date | Commit | Vitesse | Démarrage | Processeur |")
+          print("|---|---|---|---|---|")
+          for l in reversed(lignes[-15:]):
+              print(f"| {l['date']} | `{l['commit']}` | {l['vitesse']} × | {l['demarrage_ms']} ms | {l['processeur']} |")
+          EOF
+          cat "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: historique-banc
+          path: historique.jsonl
+          retention-days: 90
