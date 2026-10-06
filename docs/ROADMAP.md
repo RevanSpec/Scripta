@@ -1,7 +1,7 @@
 # Scripta — Roadmap d'intégration
 
-**Version :** 1.6
-**Référence :** [SPEC.md](SPEC.md) v2.6
+**Version :** 1.7
+**Référence :** [SPEC.md](SPEC.md) v2.7
 
 ---
 
@@ -334,6 +334,11 @@ Les estimations sont indicatives, pour un développeur Rust expérimenté travai
 >   `scripts/veille-locale.ps1`, à planifier par l'utilisateur.
 > - **4.8** Banc de performance (#19), à chaque fusion sur main : débit
 >   d'inférence et démarrage de la CLI, comparés sur un même processeur.
+> - **Durées jusqu'à 12 h** (hors plan, demandées pour des webinaires) : le
+>   plafond par défaut passe de 4 h à 12 h, et la mémoire disponible le
+>   borne avant l'extraction (R18). Éprouvé : 12 h d'audio transcrites de
+>   bout en bout, en 20 min avec `tiny`, pour 6,5 Go engagés au pic. La
+>   durée ne limite plus les sous-titres officiels.
 >
 > Restent :
 >
@@ -441,6 +446,7 @@ Aucune de ces tâches ne conditionne la v1.0.
 | R15 | **Sous Linux, la mise à jour de yt-dlp installait une archive Python** | Élevé | **Avérée — corrigée** | J4 | `update_ytdlp` visait l'asset `yt-dlp` — une archive zip qu'exécute un interpréteur du système —, alors que l'application embarque `yt-dlp_linux`, l'exécutable autonome. Dans l'AppImage, l'archive ne s'exécute pas : « introuvable ». Et la copie utilisateur passant avant la copie embarquée (ADR-004), **« Mettre à jour » rendait l'extraction impossible** — le geste même censé la rétablir. Révélé le 2026-09-28 sous WSL. **Correctif (#16) :** l'exécutable autonome de chaque plateforme, et toute mise à jour exécutée avant d'être installée ; une copie qui ne rend pas sa version est refusée, celle en place conservée |
 | R16 | **Téléchargements de modèles plafonnés à une minute** | Élevé | **Avérée — corrigée** | J4 | Le délai « d'inactivité » de 60 s passé à ureq bornait la réception du corps **entier** : `turbo` échouait sous 9 Mo/s, `large-v3` sous 17 Mo/s. La reprise sauvait les octets, pas l'utilisateur, qui voyait l'erreur à chaque minute. Révélé le 2026-09-28 en voulant mesurer `turbo`. **Correctif (#20) :** requêtes `Range` par tranches de 16 Mio, chacune bornée à 60 s — un débit plancher d'environ 280 Ko/s. Éprouvé sur HuggingFace : `small` en un seul essai de 95 s |
 | R17 | **La variante Vulkan retenait la puce graphique intégrée** | Élevé | **Avérée — corrigée** | J4 | Sur un portable hybride, ggml énumère d'abord la puce intégrée — Intel UHD en 0, RTX A1000 en 1 —, et whisper.cpp retient le premier GPU qu'il compte. La variante accélérée y tournait à 13,6 × le temps réel, **autant que le CPU** (13,4 ×). Relevé le 2026-09-28, sur les binaires de la CI. **Correctif :** `transcribe::preferred_gpu` retient le premier GPU **dédié**, à défaut le premier intégré, et `doctor` le nomme. Éprouvé : whisper.cpp reçoit `gpu_device = 1`, et la même vidéo passe à 55,8 × |
+| R18 | **Un webinaire de plusieurs heures épuise la mémoire** | Élevé | **Avérée — maîtrisée** | J4 | L'audio tient tout entier en mémoire (ADR-003) : ≈ 0,54 Go par heure au pic, 0,75 avec l'horodatage au mot. Mesuré le 2026-10-06 : **12 h d'audio engagent 6,5 Go**, et 4 h 2,1 Go. Sur une machine qui n'en dispose pas, l'allocation échoue en pleine inférence et le processus s'arrête sans message. **Garde :** `core::memoire` chiffre le besoin, le compare à 85 % de la mémoire physique disponible et refuse d'entrée, par le code de sortie 15, en disant jusqu'où la machine peut aller ; `scripta doctor` l'affiche. **Reste :** une inférence par blocs bornerait la mémoire quelle que soit la durée, au prix de jointures — ADR-003 les écartait ; elle n'est utile qu'aux machines de 8 Go, pour des vidéos de plus de huit heures |
 
 ---
 

@@ -22,6 +22,7 @@ use crate::cache;
 use crate::cancel::CancelToken;
 use crate::document::{Document, Run, Source};
 use crate::error::{Result, ScriptaError};
+use crate::memoire;
 use crate::models::{self, ModelSpec};
 use crate::probe::{self, Access, Metadata};
 use crate::subtitles::{self, Track};
@@ -29,8 +30,12 @@ use crate::transcribe::{self, Backend, Engine, Hooks, NewSegment, Options};
 use crate::transcript::Transcript;
 use crate::url::CanonicalUrl;
 
-/// Durée maximale d'une vidéo, en minutes — `--max-duration`.
-pub const DEFAULT_MAX_DURATION_MIN: u64 = 240;
+/// Durée maximale d'une vidéo, en minutes — `--max-duration` : 12 h.
+///
+/// Un plafond, pas une promesse : la mémoire disponible peut en imposer un plus
+/// bas, que [`memoire::verifier`] contrôle avant l'extraction. L'audio tient
+/// tout entier en mémoire (ADR-003), à raison d'environ 0,54 Go par heure.
+pub const DEFAULT_MAX_DURATION_MIN: u64 = 720;
 
 /// Modèle de transcription demandé.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +79,9 @@ pub struct Request {
     pub prefer_subs: bool,
     /// Consulte et alimente le cache de transcriptions (SF-08).
     pub use_cache: bool,
+    /// Durée au-delà de laquelle une inférence est refusée, en minutes. Sans
+    /// effet sur des sous-titres officiels, qui n'occupent aucune mémoire ; la
+    /// mémoire disponible peut imposer plus bas (voir [`memoire`]).
     pub max_duration_min: u64,
     pub access: Access,
     pub sidecars: Sidecars,
@@ -380,7 +388,14 @@ pub fn run(
     let meta = probe::probe(&req.sidecars.ytdlp, &req.url, &req.access, Some(cancel));
     interrompu(cancel)?;
     let meta = meta?;
-    probe::check_admissible(&meta, req.max_duration_min)?;
+    // Un direct est refusé quoi qu'on demande. La durée, elle, ne pèse que sur
+    // l'inférence : des sous-titres officiels n'occupent aucune mémoire, fût-ce
+    // ceux d'un webinaire de vingt heures. Avec `prefer_subs`, le plafond
+    // attend donc l'échec des sous-titres.
+    probe::check_not_live(&meta)?;
+    if !req.prefer_subs {
+        probe::check_duration(&meta, req.max_duration_min)?;
+    }
     observer.on_event(Event::Probed(&meta));
 
     if req.prefer_subs {
@@ -393,7 +408,12 @@ pub fn run(
                     origin: Origin::Subtitles { auto },
                 });
             }
-            None => observer.on_event(Event::SubtitlesFallback),
+            None => {
+                observer.on_event(Event::SubtitlesFallback);
+                // L'inférence devient certaine : le plafond s'applique avant
+                // de charger — voire de télécharger — un modèle pour rien.
+                probe::check_duration(&meta, req.max_duration_min)?;
+            }
         }
     }
 
@@ -403,6 +423,12 @@ pub fn run(
     };
 
     interrompu(cancel)?;
+    // Le modèle est chargé : la mémoire qui reste est celle de l'audio, que sa
+    // durée fixe (ADR-003). Mieux vaut refuser ici que voir l'allocation
+    // échouer en pleine inférence, ce qui arrête le processus sans message.
+    if let Some(duree_s) = meta.duration {
+        memoire::verifier(duree_s, req.word_timestamps, memoire::disponible())?;
+    }
     observer.on_event(Event::Extracting);
     let samples = audio::extract(
         &req.sidecars,

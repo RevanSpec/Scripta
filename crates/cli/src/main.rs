@@ -24,8 +24,8 @@ use scripta_core::pipeline::{self, EngineSlot, Event, ModelChoice, Request, VadC
 use scripta_core::sidecar::UpdateNotice;
 use scripta_core::transcribe::NewSegment;
 use scripta_core::{
-    CancelToken, Document, ModelSpec, Run, ScriptaError, cache, diagnostic, models, output, probe,
-    sidecar, subtitles, transcribe, url,
+    CancelToken, Document, ModelSpec, Run, ScriptaError, cache, diagnostic, memoire, models,
+    output, probe, sidecar, subtitles, transcribe, url,
 };
 
 #[derive(Parser)]
@@ -224,7 +224,8 @@ struct RunArgs {
     #[arg(long)]
     word_timestamps: bool,
 
-    /// Refus au-delà de cette durée, en minutes.
+    /// Refus au-delà de cette durée, en minutes (12 h par défaut). La mémoire
+    /// disponible peut imposer une limite plus basse (code 15).
     #[arg(long, default_value_t = pipeline::DEFAULT_MAX_DURATION_MIN)]
     max_duration: u64,
 
@@ -407,12 +408,23 @@ fn verifier_interruption(cancel: &CancelToken) -> scripta_core::Result<()> {
     }
 }
 
-/// Sous la minute, afficher « 0 min » est absurde.
+/// Sous la minute, afficher « 0 min » est absurde ; au-delà de deux heures,
+/// « 720 min » se lit mal.
 fn format_duree(secondes: f64) -> String {
     if secondes < 60.0 {
         format!("{secondes:.0} s")
-    } else {
+    } else if secondes < 7200.0 {
         format!("{:.0} min", secondes / 60.0)
+    } else {
+        heures_minutes((secondes / 60.0).round() as u64)
+    }
+}
+
+/// Des minutes en heures : `12 h`, `9 h 30`.
+fn heures_minutes(minutes: u64) -> String {
+    match (minutes / 60, minutes % 60) {
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m:02}"),
     }
 }
 
@@ -537,7 +549,9 @@ fn subs(raw_url: &str, args: &RunArgs) -> scripta_core::Result<()> {
     let meta = probe::probe(&ytdlp_of(args), &url, &access, Some(&cancel));
     verifier_interruption(&cancel)?;
     let meta = meta?;
-    probe::check_admissible(&meta, args.max_duration)?;
+    // Seul un direct est refusé : des sous-titres n'occupent aucune mémoire,
+    // quelle que soit la durée de la vidéo.
+    probe::check_not_live(&meta)?;
 
     let piste = subtitles::best_track(&meta, args.lang.as_deref()).ok_or_else(|| {
         let dispo = meta.available_subtitle_langs().join(", ");
@@ -1119,6 +1133,21 @@ fn doctor() -> scripta_core::Result<()> {
             ),
         }
     }
+    // L'audio tient tout entier en mémoire (ADR-003) : c'est elle, et non
+    // `--max-duration`, qui borne en pratique la durée d'une transcription.
+    match memoire::disponible() {
+        Some(octets) => println!(
+            "  {:<12} {} Go disponibles : jusqu'à {} d'audio ({} avec --word-timestamps)",
+            "mémoire",
+            format!("{:.1}", octets as f64 / (1u64 << 30) as f64).replace('.', ","),
+            heures_minutes(memoire::duree_max_min(octets, false)),
+            heures_minutes(memoire::duree_max_min(octets, true)),
+        ),
+        None => println!(
+            "  {:<12} non mesurable : seule --max-duration borne la durée",
+            "mémoire"
+        ),
+    }
     let installes: Vec<&str> = models::installed()?
         .into_iter()
         .filter(|(_, present)| *present)
@@ -1222,6 +1251,17 @@ mod tests {
     const URL: &str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 
     #[test]
+    fn les_durees_longues_se_lisent_en_heures() {
+        assert_eq!(format_duree(42.0), "42 s");
+        assert_eq!(format_duree(61.0 * 60.0), "61 min");
+        assert_eq!(format_duree(119.0 * 60.0), "119 min");
+        assert_eq!(format_duree(2.0 * 3600.0), "2 h");
+        assert_eq!(format_duree(9.5 * 3600.0), "9 h 30");
+        assert_eq!(format_duree(12.0 * 3600.0), "12 h");
+        assert_eq!(heures_minutes(725), "12 h 05");
+    }
+
+    #[test]
     fn le_vad_est_actif_par_defaut() {
         assert!(run_args(&[URL]).vad_actif());
         assert!(!run_args(&["--no-vad", URL]).vad_actif());
@@ -1290,7 +1330,7 @@ mod tests {
         assert_eq!(r.model, ModelChoice::Alias("auto".into()));
         assert_eq!(r.vad, VadChoice::Catalogue);
         assert!(r.use_cache);
-        assert_eq!(r.max_duration_min, 240);
+        assert_eq!(r.max_duration_min, 720);
 
         assert_eq!(requete_de(&["--no-vad", URL]).vad, VadChoice::Off);
         assert_eq!(

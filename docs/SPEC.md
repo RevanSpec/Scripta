@@ -1,6 +1,6 @@
 # Scripta — Cahier des charges technique et fonctionnel
 
-**Version :** 2.6
+**Version :** 2.7
 **Statut :** Validé pour implémentation — ADR-001 révisé au Jalon 0, SF-04 précisé au Jalon 2
 **Révision précédente :** 1.0 (voir [Annexe C — Journal des corrections](#annexe-c--journal-des-corrections))
 
@@ -256,7 +256,16 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
   > copie de la parole au moment même du pic — l'une des raisons de l'écarter
   > (SF-04).
 
-- Une garde `--max-duration` (défaut 240 min) protège contre les vidéos pathologiques. À 4 h, l'empreinte approcherait 1,7 Go.
+- **Durée et mémoire (v2.7).** Le plafond `--max-duration` passe de 4 h à **12 h** (720 min) : des webinaires durent bien davantage. Il ne protège plus à lui seul, car la mémoire est le vrai plafond, et celle d'un poste varie du simple au décuple. Avant l'extraction, `core::memoire` chiffre le besoin — **≈ 0,54 Go par heure au pic**, 0,75 avec l'horodatage au mot, plus une marge fixe de 1 Go —, le compare à 85 % de la mémoire physique disponible, et refuse d'entrée la vidéo qui n'y tiendrait pas : erreur `InsufficientMemory`, **code 15**, qui dit jusqu'où l'on peut aller. Sans ce refus, l'allocation échoue en pleine inférence et **le processus s'arrête sans message**. La variable `SCRIPTA_MEMORY_MB` (en Mio) remplace la mesure : pour imposer une limite plus basse, ou lever celle d'une mesure jugée trop prudente. Le contrôle ne vaut que pour l'inférence : des sous-titres officiels n'occupent aucune mémoire, et la durée ne les limite plus.
+
+  Mesuré le 2026-10-06 — parole continue, modèle `tiny`, VAD actif, CPU, banc d'inférence :
+
+  | Audio | Pic résident | Pic engagé | Durée | Vitesse |
+  |---|---|---|---|---|
+  | 4 h | 2,1 Go | — | 7 min | 33,8 × |
+  | 12 h | 6,0 Go | 6,5 Go | 20 min | 36,1 × |
+
+  Le besoin chiffré — 7,4 Go pour 12 h, marge fixe de 1 Go comprise — couvre le pic engagé mesuré. Seul le surcoût de l'horodatage au mot est lu dans le code, non mesuré : whisper.cpp garde alors un `f32` d'énergie par échantillon (`state->energy`), soit 0,21 Go par heure. L'ancienne estimation de cette section — 1,7 Go à 4 h — ignorait la copie « padded » et le spectrogramme : la mesure donne 2,1 Go avec `tiny`, et le calcul 2,5 Go avec `base`. Le détail est dans [VERIFICATION](VERIFICATION.md).
 - L'affichage progressif de la GUI est alimenté par le **callback de nouveaux segments** de whisper.cpp, pas par un découpage. whisper.cpp traite l'audio séquentiellement par fenêtres de 30 s et émet ses segments au fil de l'eau : le rendu est donc bien progressif, simplement il démarre une fois le téléchargement achevé.
 
 #### ADR-004 — Emplacement des sidecars mis à jour
@@ -297,7 +306,7 @@ Ces quatre décisions sont structurantes : les inverser après le Jalon 2 coûte
 | Champ | Usage |
 |---|---|
 | `title`, `channel`, `id`, `upload_date` | export JSON, nom de fichier par défaut |
-| `duration` | **calcul de la progression** (SF-04), garde `--max-duration` |
+| `duration` | **calcul de la progression** (SF-04), garde `--max-duration`, mémoire nécessaire ([ADR-003](#adr-003--inférence-non-streamée)) |
 | `is_live`, `live_status` | refus des flux en direct (SF-07) |
 | `age_limit` | message d'erreur actionnable |
 | `subtitles`, `automatic_captions` | SF-01 bis, alimente `--prefer-subs` |
@@ -572,7 +581,8 @@ YouTube modifie fréquemment ses mécanismes d'extraction : un `yt-dlp` embarqu�
 | 11 | `Unavailable` | Vidéo privée, supprimée, géo-bloquée ou réservée aux membres | motif dans `stderr` de yt-dlp |
 | 12 | `AuthRequired` | Connexion requise (vérification anti-robot ou limite d'âge) — voir `--cookies-from-browser` | idem |
 | 13 | `LiveNotSupported` | Diffusion en direct non prise en charge | `is_live` de la sonde `-J` |
-| 14 | `TooLong` | Durée supérieure à `--max-duration` | `duration` de la sonde |
+| 14 | `TooLong` | Durée supérieure à `--max-duration` (12 h par défaut) | `duration` de la sonde |
+| 15 | `InsufficientMemory` | Durée que la mémoire disponible ne permet pas de transcrire — dit jusqu'où elle le permet | `duration` de la sonde, mémoire mesurée avant l'extraction |
 | 20 | `ExtractionFailed` | Échec de l'extraction audio (yt-dlp/ffmpeg) | code de sortie ≠ 0 |
 | 21 | `SidecarMissing` | Binaire `yt-dlp` ou `ffmpeg` introuvable — voir `scripta doctor` | résolution de chemin |
 | 30 | `ModelUnavailable` | Modèle indisponible, téléchargement échoué ou empreinte invalide | SF-03 |
@@ -584,6 +594,7 @@ YouTube modifie fréquemment ses mécanismes d'extraction : un `yt-dlp` embarqu�
 
 - **Code 12 — « Sign in to confirm you're not a bot ».** C'est aujourd'hui l'échec le plus fréquent en conditions réelles, en particulier depuis des adresses IP de centres de données. Le message doit orienter vers `--cookies-from-browser` ([SF-09](#sf-09--authentification-et-confidentialité)) plutôt que de laisser l'utilisateur face à une erreur opaque.
 - **Code 13 — flux en direct.** Un live produit un flux de durée non bornée : sans ce garde-fou, le `Vec<f32>` croît jusqu'à épuisement de la mémoire. La détection se fait **avant** l'extraction, à partir de la sonde métadonnées.
+- **Codes 14 et 15 — deux remèdes.** Le code 14 se lève avec `--max-duration` ; le code 15, non : c'est la mémoire de la machine qui manque, et il faut en libérer — ou retirer l'horodatage au mot, que le message propose quand cela suffit. Deux codes, donc, comme l'exige l'invariant de la table : un script distingue ce qu'il peut corriger de ce qu'il ne le peut pas. `scripta doctor` affiche la mémoire disponible et la durée qu'elle permet.
 
 **Diagnostic.** `scripta doctor` vérifie et affiche : sidecars résolus et leurs versions, backends ggml détectés, modèles en cache, chemins et droits d'écriture, connectivité vers HuggingFace et YouTube.
 
@@ -664,7 +675,7 @@ OPTIONS DE `run` :
         --prefer-subs           Utilise les sous-titres officiels s'ils existent
         --max-line-width <N>    Largeur de ligne des sous-titres [défaut: 42]
         --max-line-count <N>    Lignes par cue [défaut: 2]
-        --max-duration <MIN>    Refus au-delà de cette durée [défaut: 240]
+        --max-duration <MIN>    Refus au-delà de cette durée [défaut: 720]
         --cookies-from-browser <NAV>   Cookies pour les vidéos restreintes
         --no-cache              Ignore le cache de transcriptions
         --ytdlp-path <PATH>     Binaire yt-dlp explicite (ADR-004)
@@ -828,6 +839,7 @@ OPTIONS DE `run` :
 |---|---|
 | Empreinte RSS, 1 h d'audio, modèle `base` | < 1,1 Go (mesuré : 1 040 Mo sans VAD ; 863 Mo avec) |
 | Empreinte totale au pic | ≈ 560 Mo / h + ~260 Mo fixes ([ADR-003](#adr-003--inférence-non-streamée)) |
+| Durée maximale par défaut | 12 h : **6,5 Go engagés au pic, mesurés** — transcrites en 20 min avec `tiny` (ADR-003) |
 | Démarrage CLI (`--version`, `--help`) | < 150 ms |
 | Sonde de métadonnées (SF-01) | < 3 s en conditions nominales |
 | Écritures disque hors sortie et caches | **0 octet** (invariant « zero-disk ») |
@@ -931,6 +943,8 @@ jamais requis (voir §5.4).
 | 15 | Incompatibilité GPLv3 / App Store, avertissement CGU | [§1.3](#13-licence-et-conformité) |
 
 ## Annexe C — Journal des corrections
+
+**v2.7** — Durée maximale portée à 12 h, avec une garde de mémoire (ADR-003, SF-07, §5.2) : la mémoire disponible borne la durée avant l'extraction (code 15), le plafond de durée ne s'applique plus aux sous-titres officiels, estimation de l'empreinte corrigée et mesurée sur 4 h et 12 h.
 
 **v2.6** — Jalon 4, variantes Vulkan : mise en œuvre d'ADR-001 (chargeur du système, carte dédiée, SDK épinglé), seuils GPU du §5.2 mesurés, variantes au §5.4, Annexe D (risque R17).
 

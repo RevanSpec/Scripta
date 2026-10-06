@@ -208,6 +208,7 @@ commande, `$LASTEXITCODE`.
 | `30` — modèle absent | `& $S --model-path "C:\absent.bin" $U` |
 | `13` — diffusion en direct | `& $S -m base "<URL d'un live en cours>"` |
 | `14` — durée excessive | `& $S -m base --max-duration 1 $U` |
+| `15` — mémoire insuffisante pour la durée ; avant toute extraction | `$env:SCRIPTA_MEMORY_MB = 4096; & $S -m base "<URL d'une vidéo de 10 h>"` |
 | `50` — fichier existant, sans `--force` ; **immédiat**, avant toute transcription | `& $S -o sortie.txt $U` deux fois de suite |
 | `50` — répertoire de sortie absent, immédiat | `& $S -o inexistant\x.txt $U` |
 | `2` — `--vad-model` avec `--no-vad` | `& $S --vad-model x.bin --no-vad $U` |
@@ -515,6 +516,70 @@ probablement.
 **Chargeur Vulkan.** L'AppImage Vulkan de la même répétition n'embarque plus
 `libvulkan.so.1` : elle démarre sous WSLg avec le chargeur du système, et
 son en-tête annonce « VULKAN », le modèle automatique passant à `turbo`.
+
+---
+
+### Très longues durées — 2026-10-06
+
+Demande : des webinaires durent bien plus de 4 h, plafond d'alors. Un audio
+tient tout entier en mémoire (ADR-003) : la durée se paie en gigaoctets, et il
+fallait la mesurer au lieu de l'extrapoler.
+
+**Méthode.** `crates/core/examples/banc.rs`, en release, CPU, modèle `tiny`,
+VAD actif, langue forcée. L'échantillon de 8,33 s — « ask not what your country
+can do for you » — est répété bout à bout : de la parole **continue**, donc le
+pire cas pour la mémoire, le VAD n'ayant rien à retrancher. Poste : ThinkPad
+P16v, 31,7 Go de mémoire vive, 14 threads. Le pic est lu **à neuf** toutes les
+deux secondes sur le processus (`PeakWorkingSet64`, `PeakPagedMemorySize64`) :
+un objet `Process` conservé garde un instantané périmé, et une première sonde,
+qui bornait ses relevés à 2 Gio par un `Int32`, les avait faussés.
+
+| Audio | Répétitions | Pic résident | Pic engagé | Inférence | Vitesse | Segments |
+|---|---:|---:|---:|---:|---:|---:|
+| 4 h (14 403 s) | 1 729 | 2,1 Go | — | 426 s | 33,8 × | 3 167 |
+| 12 h (43 208 s) | 5 187 | **6,0 Go** | **6,5 Go** | 1 196 s | 36,1 × | 9 489 |
+
+Le pic engagé de 4 h n'a pas été relevé de façon fiable : la première sonde le
+bornait. Le pic de 12 h s'établit au calcul du spectrogramme, dans les premières
+minutes ; la mémoire résidente retombe ensuite à 3,9 Go pendant l'inférence.
+
+**Ce que cela montre.**
+
+- **12 h d'audio passent de bout en bout**, sans dépassement ni arrêt : whisper.cpp
+  mesure l'audio en `int` — jusqu'à 37 h à 16 kHz —, et rien d'autre dans la
+  chaîne, horodatages SRT et VTT compris (`u64`), ne s'y oppose.
+- **La pente est de 0,5 Go par heure**, conforme à l'estimation d'ADR-003 : le
+  PCM, sa copie « padded » et le spectrogramme font 160 000 octets par seconde,
+  soit 6 592 Mio pour 12 h — pour 6 680 Mio engagés mesurés, dont une centaine
+  de fixes. L'estimation de la SPEC, 1,7 Go à 4 h, était trop basse : la mesure
+  donne 2,1 Go avec `tiny`, et le calcul 2,5 Go avec `base`.
+- **Le code ne prévoit aucun repli au manque de mémoire.** `Vec::with_capacity`
+  avorte le processus quand l'allocation échoue, et une exception C++ de
+  whisper.cpp ne peut traverser l'interface FFI : l'arrêt sans message est
+  attendu d'après ces deux sémantiques, mais non éprouvé — aucun poste d'essai
+  n'a manqué de mémoire. D'où le refus d'entrée de `core::memoire` : le besoin
+  chiffré, 7,4 Go pour 12 h avec 1 Go de marge, est comparé à 85 % de la mémoire
+  physique disponible.
+
+**Le refus, éprouvé sur une vraie vidéo de 10 h** — une conférence de
+photographie de 599 min, sonde YouTube réelle, aucune extraction. Mémoire
+simulée par `SCRIPTA_MEMORY_MB` :
+
+| Mémoire | Option | Sortie | Message |
+|---:|---|:---:|---|
+| 4 Go | — | `15` | « n'en permet que 268 min. Libérez de la mémoire et réessayez » |
+| 8 Go | `--word-timestamps` | `15` | « … 463 min », puis la piste : « la limite passerait à 648 min » |
+| 6 Go | `--word-timestamps` | `15` | « … 327 min », **sans** piste : retirer l'option ne suffirait pas |
+| 64 Go | `--max-duration 480` | `14` | « supérieure à la limite de 480 min (--max-duration) » |
+
+`scripta doctor` annonce, ici : « 12,5 Go disponibles : jusqu'à 17 h 56 d'audio
+(12 h 48 avec --word-timestamps) ». Une vidéo courte, « Me at the zoo », passe
+sans que la garde se manifeste.
+
+**Non éprouvé.** La mesure de la mémoire disponible sous macOS (`vm_stat`,
+analysé par un test sur un exemple de sortie) : aucun Mac ; sans mesure, la
+durée seule borne la transcription. Et une vraie vidéo de 12 h : la source
+la plus longue trouvée en une recherche fait 10 h.
 
 ---
 

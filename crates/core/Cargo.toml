@@ -31,6 +31,11 @@ directories.workspace = true
 # nombre de threads d'inférence par défaut en dépend (voir `default_threads`).
 num_cpus = "1"
 
+# Mémoire disponible sous Windows (`memoire::disponible`). Déjà dans le graphe,
+# par `directories` : seule la feature de l'API s'y ajoute.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
+
 # Fixture de test : sidecar simulé (yt-dlp / ffmpeg), configuré par son nom de
 # fichier. Déclaré en binaire du paquet pour que `cargo test` expose
 # CARGO_BIN_EXE_scripta-fake-sidecar aux tests d'intégration.

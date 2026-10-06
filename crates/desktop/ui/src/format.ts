@@ -9,10 +9,18 @@ export function horodatage(secondes: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${r}` : `${m}:${r}`;
 }
 
-/** Durée d'une vidéo : sous la minute, « 0 min » serait absurde. */
+/**
+ * Durée d'une vidéo : sous la minute, « 0 min » serait absurde ; au-delà de
+ * deux heures, « 720 min » se lit mal.
+ */
 export function duree(secondes: number | null): string {
   if (secondes === null) return "durée inconnue";
-  return secondes < 60 ? `${Math.round(secondes)} s` : `${Math.round(secondes / 60)} min`;
+  if (secondes < 60) return `${Math.round(secondes)} s`;
+  const minutes = Math.round(secondes / 60);
+  if (minutes < 120) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h} h` : `${h} h ${String(m).padStart(2, "0")}`;
 }
 
 export function taille(octets: number): string {

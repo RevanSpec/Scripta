@@ -29,6 +29,22 @@ pub enum ScriptaError {
     )]
     TooLong { actual_min: u64, limit_min: u64 },
 
+    /// La mémoire disponible ne permet pas de transcrire la vidéo : mieux vaut
+    /// la refuser d'entrée que laisser l'allocation échouer en pleine
+    /// inférence, ce qui arrête le processus sans message. Distincte de
+    /// [`ScriptaError::TooLong`], dont le remède diffère : `--max-duration` n'y
+    /// change rien, il faut libérer de la mémoire.
+    #[error("{}", message_memoire(.actual_min, .limit_min, .available_mb, .limit_without_words_min))]
+    InsufficientMemory {
+        actual_min: u64,
+        limit_min: u64,
+        /// Mémoire disponible au moment du refus, en Mio.
+        available_mb: u64,
+        /// Si l'horodatage au mot était demandé : la durée que la mémoire
+        /// permettrait sans lui, qui alourdit la transcription de 40 %.
+        limit_without_words_min: Option<u64>,
+    },
+
     #[error("Échec de l'extraction audio : {detail}")]
     ExtractionFailed { detail: String },
 
@@ -62,6 +78,7 @@ impl ScriptaError {
             Self::AuthRequired { .. } => 12,
             Self::LiveNotSupported => 13,
             Self::TooLong { .. } => 14,
+            Self::InsufficientMemory { .. } => 15,
             Self::ExtractionFailed { .. } => 20,
             Self::SidecarMissing { .. } => 21,
             Self::ModelUnavailable { .. } => 30,
@@ -70,6 +87,27 @@ impl ScriptaError {
             Self::Interrupted => 130,
         }
     }
+}
+
+/// Message de [`ScriptaError::InsufficientMemory`] : ce que la mémoire permet
+/// et, quand retirer l'horodatage au mot suffirait, cette piste-là.
+fn message_memoire(
+    actual_min: &u64,
+    limit_min: &u64,
+    available_mb: &u64,
+    limit_without_words_min: &Option<u64>,
+) -> String {
+    let go = format!("{:.1}", *available_mb as f64 / 1024.0).replace('.', ",");
+    let sans_mots = match limit_without_words_min {
+        Some(sans) if sans >= actual_min => {
+            format!(", ou retirez --word-timestamps : la limite passerait à {sans} min")
+        }
+        _ => String::new(),
+    };
+    format!(
+        "Durée de {actual_min} min : la mémoire disponible ({go} Go) n'en permet que \
+         {limit_min} min. Libérez de la mémoire et réessayez{sans_mots}."
+    )
 }
 
 pub type Result<T> = std::result::Result<T, ScriptaError>;
@@ -167,6 +205,7 @@ mod tests {
             ScriptaError::AuthRequired { .. } => 12,
             ScriptaError::LiveNotSupported => 13,
             ScriptaError::TooLong { .. } => 14,
+            ScriptaError::InsufficientMemory { .. } => 15,
             ScriptaError::ExtractionFailed { .. } => 20,
             ScriptaError::SidecarMissing { .. } => 21,
             ScriptaError::ModelUnavailable { .. } => 30,
@@ -190,6 +229,12 @@ mod tests {
             ScriptaError::TooLong {
                 actual_min: 300,
                 limit_min: 240,
+            },
+            ScriptaError::InsufficientMemory {
+                actual_min: 720,
+                limit_min: 480,
+                available_mb: 6144,
+                limit_without_words_min: None,
             },
             ScriptaError::ExtractionFailed {
                 detail: String::new(),
@@ -249,6 +294,35 @@ mod tests {
             // à l'utilisateur.
             assert!(msg.len() > 15, "message trop laconique : {msg}");
         }
+    }
+
+    #[test]
+    fn le_refus_pour_memoire_dit_ce_qui_tient_et_comment_faire() {
+        let refus = |sans_mots| {
+            ScriptaError::InsufficientMemory {
+                actual_min: 720,
+                limit_min: 480,
+                available_mb: 6144,
+                limit_without_words_min: sans_mots,
+            }
+            .to_string()
+        };
+        let simple = refus(None);
+        for attendu in ["720 min", "6,0 Go", "480 min", "Libérez"] {
+            assert!(
+                simple.contains(attendu),
+                "« {attendu} » absent de : {simple}"
+            );
+        }
+        // `--max-duration` n'y changerait rien : il ne doit pas être cité.
+        assert!(!simple.contains("--max-duration"), "{simple}");
+        assert!(!simple.contains("--word-timestamps"), "{simple}");
+        // Retirer l'horodatage au mot suffirait : la piste est nommée, chiffrée.
+        let piste = refus(Some(780));
+        assert!(piste.contains("--word-timestamps"), "{piste}");
+        assert!(piste.contains("780 min"), "{piste}");
+        // S'il ne suffisait pas, le conseil serait faux : il est tu.
+        assert!(!refus(Some(600)).contains("--word-timestamps"));
     }
 
     #[test]

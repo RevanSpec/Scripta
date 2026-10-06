@@ -71,6 +71,22 @@ impl IpcError {
     }
 }
 
+/// Une durée en minutes, lisible : `45 min`, `13 h 20`, `12 h`.
+fn duree(minutes: u64) -> String {
+    if minutes < 120 {
+        return format!("{minutes} min");
+    }
+    match (minutes / 60, minutes % 60) {
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m:02}"),
+    }
+}
+
+/// Des Mio en Go, à la française : `4,1`.
+fn go(mio: u64) -> String {
+    format!("{:.1}", mio as f64 / 1024.0).replace('.', ",")
+}
+
 impl From<ScriptaError> for IpcError {
     fn from(e: ScriptaError) -> Self {
         let code = e.exit_code();
@@ -101,8 +117,38 @@ impl From<ScriptaError> for IpcError {
                 limit_min,
             } => IpcError::new(
                 code,
-                format!("Cette vidéo dure {actual_min} min, au-delà de la limite de {limit_min} min."),
+                format!(
+                    "Cette vidéo dure {}, au-delà de la limite de {}.",
+                    duree(actual_min),
+                    duree(limit_min)
+                ),
             ),
+            ScriptaError::InsufficientMemory {
+                actual_min,
+                limit_min,
+                available_mb,
+                limit_without_words_min,
+            } => {
+                let mut conseil =
+                    String::from("Fermez des applications pour libérer de la mémoire, puis réessayez.");
+                // La piste de l'horodatage au mot n'est donnée que si elle suffit.
+                if let Some(sans) = limit_without_words_min.filter(|&sans| sans >= actual_min) {
+                    conseil.push_str(&format!(
+                        " Décocher l'horodatage au mot, dans les options avancées, porterait la limite à {}.",
+                        duree(sans)
+                    ));
+                }
+                IpcError::new(
+                    code,
+                    format!(
+                        "Cette vidéo dure {} : la mémoire disponible de l'ordinateur ({} Go) n'en permet que {}.",
+                        duree(actual_min),
+                        go(available_mb),
+                        duree(limit_min)
+                    ),
+                )
+                .conseil(conseil)
+            }
             ScriptaError::ExtractionFailed { detail } => {
                 IpcError::new(code, "L'audio de la vidéo n'a pas pu être extrait.")
                     .conseil("YouTube change régulièrement : mettre à jour yt-dlp règle le problème le plus souvent.")
@@ -154,6 +200,12 @@ mod tests {
                 actual_min: 300,
                 limit_min: 240,
             },
+            ScriptaError::InsufficientMemory {
+                actual_min: 720,
+                limit_min: 480,
+                available_mb: 6144,
+                limit_without_words_min: Some(760),
+            },
             ScriptaError::ExtractionFailed {
                 detail: "HTTP Error 403".into(),
             },
@@ -202,6 +254,55 @@ mod tests {
             let attendu = e.exit_code();
             assert_eq!(IpcError::from(e).code, attendu);
         }
+    }
+
+    #[test]
+    fn les_durees_s_ecrivent_en_heures_des_deux_heures() {
+        assert_eq!(duree(45), "45 min");
+        assert_eq!(duree(119), "119 min");
+        assert_eq!(duree(120), "2 h");
+        assert_eq!(duree(800), "13 h 20");
+        assert_eq!(duree(720), "12 h");
+        assert_eq!(go(4096), "4,0");
+        assert_eq!(go(4200), "4,1");
+    }
+
+    #[test]
+    fn une_video_trop_longue_se_lit_en_heures() {
+        let ipc = IpcError::from(ScriptaError::TooLong {
+            actual_min: 800,
+            limit_min: 720,
+        });
+        assert_eq!(
+            ipc.message,
+            "Cette vidéo dure 13 h 20, au-delà de la limite de 12 h."
+        );
+    }
+
+    #[test]
+    fn le_manque_de_memoire_est_explique_et_son_remede_donne() {
+        let refus = |sans_mots| {
+            IpcError::from(ScriptaError::InsufficientMemory {
+                actual_min: 720,
+                limit_min: 480,
+                available_mb: 6144,
+                limit_without_words_min: sans_mots,
+            })
+        };
+        let simple = refus(None);
+        assert_eq!(simple.code, 15);
+        for attendu in ["12 h", "6,0 Go", "8 h"] {
+            assert!(simple.message.contains(attendu), "{}", simple.message);
+        }
+        let conseil = simple.conseil.expect("un conseil");
+        assert!(conseil.contains("libérer de la mémoire"), "{conseil}");
+        // L'horodatage au mot n'est cité que s'il était coché et suffirait.
+        assert!(!conseil.contains("horodatage"), "{conseil}");
+        let piste = refus(Some(760)).conseil.expect("un conseil");
+        assert!(piste.contains("horodatage au mot"), "{piste}");
+        assert!(piste.contains("12 h 40"), "{piste}");
+        let insuffisante = refus(Some(600)).conseil.expect("un conseil");
+        assert!(!insuffisante.contains("horodatage"), "{insuffisante}");
     }
 
     #[test]
