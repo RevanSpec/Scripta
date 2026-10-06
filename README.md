@@ -437,7 +437,7 @@ ponctuation) et traduction automatique (deux passages machine cumulés).
 | `--entropy-thold <S>` | seuil d'entropie des décodages répétitifs (défaut : 2.4) |
 | `--max-line-width <N>` | largeur des lignes de sous-titres (défaut 42) |
 | `--max-line-count <N>` | lignes par sous-titre (défaut 2) |
-| `--max-duration <MIN>` | refus au-delà (défaut 240) |
+| `--max-duration <MIN>` | refus au-delà (défaut 720, soit 12 h) ; la mémoire disponible peut imposer moins ([Durée et mémoire](#durée-et-mémoire)) |
 | `-t, --threads <N>` | threads d'inférence ; par défaut les cœurs physiques, deux threads logiques restant libres |
 | `--force` | écrase le fichier de sortie s'il existe |
 | `-q, --quiet` | supprime la progression |
@@ -482,12 +482,28 @@ Les codes de sortie sont contractuels
 | `12` | connexion requise (vérification anti-robot, limite d'âge) |
 | `13` | diffusion en direct, non prise en charge |
 | `14` | durée supérieure à `--max-duration` |
+| `15` | mémoire disponible insuffisante pour cette durée |
 | `20` | échec de l'extraction audio |
 | `21` | `yt-dlp` ou `ffmpeg` introuvable |
 | `30` | modèle indisponible |
 | `40` | échec de l'inférence |
 | `50` | écriture impossible |
 | `130` | interrompu par l'utilisateur |
+
+### Durée et mémoire
+
+Scripta transcrit par défaut jusqu'à **12 h** d'audio (`--max-duration`).
+L'audio tient tout entier en mémoire : environ **0,54 Go par heure**, plus
+1 Go. Pour 12 h, comptez 9 Go de mémoire libre — 12 Go avec
+`--word-timestamps`, qui y ajoute 40 %. Mesuré : 12 h d'audio transcrites en
+20 minutes avec `tiny`, pour 6,5 Go engagés au pic.
+
+Quand la mémoire disponible ne suffit pas, Scripta refuse d'entrée, par le code
+`15`, et dit jusqu'où elle le permet, plutôt que de s'arrêter sans message en
+pleine transcription. `scripta doctor` affiche cette limite. La variable
+d'environnement `SCRIPTA_MEMORY_MB`, en Mio, remplace la mesure. Les
+sous-titres officiels (`--prefer-subs`, `scripta subs`) n'occupent aucune
+mémoire : aucune durée ne les limite.
 
 ### Interruption
 
